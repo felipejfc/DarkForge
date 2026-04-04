@@ -43,6 +43,8 @@
         </div>
         <div class="view-header-right">
           <input id="skillSearch" type="search" placeholder="Search skills..." class="search-input">
+          <button id="importPackageButton" class="btn btn-ghost btn-sm" type="button">Add Repo</button>
+          <button id="managePackagesButton" class="btn btn-ghost btn-sm" type="button">Repos</button>
           <button id="newSkillButton" class="btn btn-primary" type="button">+ New Skill</button>
         </div>
       </div>
@@ -298,9 +300,48 @@
           ></textarea>
         </label>
         <div id="skillSchemaStatus" class="field-help">No structured inputs defined.</div>
+        <label class="field">
+          <span>Library Dependencies (JSON array)</span>
+          <textarea
+            id="skillLibraryDependencies"
+            rows="4"
+            placeholder='["darkforge/zip"]'
+          ></textarea>
+        </label>
       </div>
       <div class="modal-footer">
         <button class="btn btn-primary" data-dismiss="settingsModal" type="button">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="packageModal" class="modal-overlay" hidden>
+    <div class="modal modal-wide">
+      <div class="modal-header">
+        <h2>Repos & Libraries</h2>
+        <button class="modal-close" data-dismiss="packageModal" type="button">&times;</button>
+      </div>
+      <div class="modal-body">
+        <label class="field">
+          <span>GitHub Repo Source</span>
+          <input id="packageSourceInput" type="text" placeholder="https://github.com/owner/repo/tree/main/path">
+        </label>
+        <div class="field-help">Public GitHub repos only in v1. DarkForge resolves and pins the install to a commit SHA.</div>
+        <div class="modal-inline-actions">
+          <button id="previewPackageButton" class="btn btn-ghost btn-sm" type="button">Preview Repo</button>
+          <button id="installPackageButton" class="btn btn-primary btn-sm" type="button">Add Repo</button>
+        </div>
+        <section class="package-section">
+          <h3>Installed Repos</h3>
+          <div id="packageList" class="package-list"></div>
+        </section>
+        <section class="package-section">
+          <h3>Libraries</h3>
+          <div id="libraryList" class="package-list"></div>
+        </section>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" data-dismiss="packageModal" type="button">Done</button>
       </div>
     </div>
   </div>

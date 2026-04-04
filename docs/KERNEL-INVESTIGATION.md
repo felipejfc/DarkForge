@@ -15,10 +15,10 @@ Offsets are managed via `DeviceProfile.swift` — a device profile struct select
 
 ## Tools
 
-- **opcodex-cli**: Decompiler and binary analysis tool
-  - Path: available on `$PATH` or via `$OPCODEX_CLI`
-  - iPhone project: `./ipsw/22G86__iPhone17,4/.opcodex/kernelcache.release.iPhone17_4`
-  - iPad project: `./ipsw/22D82__iPad8,1_2_3_4_5_6_7_8_9_10_11_12/.opcodex/kernelcache.release.iPad8_9_10_11_12`
+- **IDA Pro**: Decompiler and binary analysis tool
+  - Use it to import the kernelcache, inspect pseudocode/disassembly, and follow xrefs/call chains
+  - iPhone input: `./ipsw/22G86__iPhone17,4/kernelcache.release.iPhone17,4`
+  - iPad input: `./ipsw/22D82__iPad8,1_2_3_4_5_6_7_8_9_10_11_12/kernelcache.release.iPad8,9_10_11_12`
 - **ipsw**: Apple firmware analysis tool (available on `$PATH`)
   - Used for: MIG handler tables, fileset info, direct disassembly
 - **Kernelcaches**:
@@ -37,34 +37,38 @@ The key is finding code that reads/writes the specific struct field. Approaches:
 
 **a) Search by symbol name:**
 ```
-opcodex-cli project-search <project> "function_name"
-opcodex-cli function-lookup <project> "function_name"
+Use IDA Pro's symbol/name search to jump directly to `function_name`.
+Check both the disassembly and pseudocode views once located.
 ```
 
 **b) Follow the call chain from a known MIG handler:**
 ```
 ipsw kernel mig <kernelcache>  # Lists all MIG handlers with addresses
-opcodex-cli callees <project> <address>  # Find what a function calls
-opcodex-cli callers <project> <address>  # Find who calls a function
+In IDA Pro, open the MIG handler and use xrefs/call graph navigation
+to inspect both callees and callers.
 ```
 
 **c) Search for related strings:**
 ```
-opcodex-cli substring-search <project> "keyword"
-opcodex-cli project-search <project> "keyword"
+Search strings/names in IDA Pro for the relevant keyword, then follow
+xrefs from the matching string or symbol to the surrounding code.
 ```
 
 ### 3. Decompile and read the assembly
 
 ```
-opcodex-cli explain <project> <address>
+Open the target function in IDA Pro and inspect both the Hex-Rays
+pseudocode and the raw assembly around the field access.
 ```
 
-This returns JSON with the function's assembly. Look for `ldr`/`str` instructions with immediate offsets from a register that holds the struct pointer. The offset in the instruction IS the struct field offset.
+Look for `ldr`/`str` instructions with immediate offsets from a register that
+holds the struct pointer. The offset in the instruction IS the struct field
+offset.
 
 ### 4. Verify with cross-references
 
-Find multiple functions that access the same field to confirm the offset. Use `callers` and `callees` to trace the call chain.
+Find multiple functions that access the same field to confirm the offset. Use
+IDA Pro xrefs and the call graph to trace the call chain.
 
 ## Verified Offsets — iPhone17,4 (build 22G86)
 
@@ -82,7 +86,7 @@ Find multiple functions that access the same field to confirm the offset. Use `c
 **How taskIpcSpace was found:**
 1. Started from `_Xtask_set_special_port_from_user` (MIG 3410) via `ipsw kernel mig`
 2. Followed callees to `convert_port_to_space_read` (0xfffffff008173ee8)
-3. Decompiled with `opcodex-cli explain` — found `ldr x16, [x20, #0x318]` followed by `autda`
+3. Decompiled in IDA Pro — found `ldr x16, [x20, #0x318]` followed by `autda`
 4. x20 = task pointer (first arg after port conversion)
 
 ### ipc_space struct
@@ -92,7 +96,7 @@ Find multiple functions that access the same field to confirm the offset. Use `c
 | is_table | 0x20 | `ipc_space_terminate` at 0xfffffff00812f39c: `ldr x16, [x19, #0x20]` then `autda` with disc 0xb8b5 |
 
 **How is_table was found:**
-1. Found `_ipc_space_terminate` via `project-search "ipc_space"`
+1. Found `_ipc_space_terminate` via IDA Pro symbol search for `ipc_space`
 2. Decompiled — x19 = ipc_space (first arg), `ldr x16, [x19, #0x20]` loads is_table
 
 ### thread struct
@@ -112,7 +116,7 @@ Find multiple functions that access the same field to confirm the offset. Use `c
 | bsdAstGuardExcCode | 0x4c0 | `bsd_ast` at 0xfffffff008630af8: `ldr x8, [x19, #0x4c0]` — BSD guard path (NOT used for EXC_GUARD injection) |
 
 **How kstackptr was found:**
-1. Found `Switch_context` via `function-lookup`
+1. Found `Switch_context` via IDA Pro name search
 2. It calls a trampoline at 0xfffffff008105680
 3. Decompiled trampoline — first instructions: `mrs x4, tpidr_el1; add x6, x4, #0x148; ldr x5, [x6]` — loads kstackptr from tpidr_el1+0x148
 
@@ -153,13 +157,16 @@ DarkSword's offset tables confirm: for our build (tro=0x3f0, ast=0x414, mutexDat
 | ip_nsrequest | 0x58 | DarkSword default, used in port forging |
 | ip_sorights | 0x84 | DarkSword default |
 
-### MIG bypass offsets
+### Historical MIG bypass offsets
+
+These offsets were investigated during earlier experiments, but the current app
+does not use the MIG bypass path anymore.
 
 | Field | Offset from kbase | Verification |
 |-------|-------------------|-------------|
 | migLock | 0x4066f88 | In sandbox kext `__DATA` (0xfffffff00b06af88). Read returns 0x420000 (non-zero = valid lock structure). Write verified with readback. |
 | migSbxMsg | 0x4066fa8 | 0x20 after migLock, in sandbox `__DATA` |
-| migKernelStackLR | Multiple | ALL callers of `_sb_evaluate_internal` found via `opcodex-cli callers`. The actual LR that fires for thread_set_exception_ports is offset 0x3925000 (from `sub_0xfffffff00a928f2c`). |
+| migKernelStackLR | Multiple | ALL callers of `_sb_evaluate_internal` found via IDA Pro xrefs. The actual LR that fires for thread_set_exception_ports is offset 0x3925000 (from `sub_0xfffffff00a928f2c`). |
 
 **How migLock was found:**
 1. Found sandbox kext via `ipsw macho info --fileset-entry com.apple.security.sandbox`
@@ -169,8 +176,8 @@ DarkSword's offset tables confirm: for our build (tro=0x3f0, ast=0x414, mutexDat
 5. NOTE: The original comment values in MIGFB.swift (0x4066f88/0x4066fa8) were actually correct for this build! DarkSword's 24.6 values (0x38543a8) were for a different sub-build.
 
 **How migKernelStackLR was verified:**
-1. Found `_sb_evaluate_internal` at 0xfffffff00a938fbc via `project-search`
-2. Used `opcodex-cli callers` to find ALL 17 callers with their callsite addresses
+1. Found `_sb_evaluate_internal` at 0xfffffff00a938fbc via IDA Pro symbol search
+2. Used IDA Pro xrefs to find ALL 17 callers with their callsite addresses
 3. Computed LR = callsite + 4 for each
 4. Modified MIG bypass to search for ALL known LRs instead of just one
 5. The actual match was at offset 0x3925000 (NOT the originally assumed 0x3934ee0)
@@ -187,7 +194,7 @@ DarkSword's offset tables confirm: for our build (tro=0x3f0, ast=0x414, mutexDat
 
 ## Verified Offsets — iPad8,9 (build 22D82)
 
-All offsets found via opcodex static analysis of `kernelcache.release.iPad8,9_10_11_12`.
+All offsets found via IDA Pro static analysis of `kernelcache.release.iPad8,9_10_11_12`.
 DarkSword has NO iPad entries — all offsets were discovered from scratch.
 MIG bypass is NOT needed on iOS 18.3.2 (< 18.4).
 
@@ -270,7 +277,7 @@ The deltas are NOT consistent — each field shifted by a different amount. This
 
 1. **Never trust DarkSword offsets for a different build.** Even same iOS version + same device family can have different offsets between sub-builds.
 2. **Always verify from kernelcache disassembly** before writing to kernel memory. Wrong offset writes cause kernel panics.
-3. **Use opcodex `explain` + `callers`/`callees` chain** to trace from known MIG handlers or exported symbols to the target field access.
+3. **Use IDA Pro pseudocode plus xrefs/call graph chaining** to trace from known MIG handlers or exported symbols to the target field access.
 4. **The instruction encoding reveals the offset directly**: `ldr x8, [x19, #0x420]` means the field is at struct+0x420.
 5. **PAC discriminators are visible in the `movk` + `autda` pattern**: e.g., `movk x17, #0x8280, lsl #48` followed by `autda x16, x17`.
 6. **Multiple callers**: Functions like `_sb_evaluate_internal` have many callers. Search for ALL of them, not just the first one found.
@@ -327,7 +334,7 @@ The deltas are NOT consistent — each field shifted by a different amount. This
    - Immediately after send: restore target's original key
    - **Race condition**: On multi-core, the target thread may start executing before we restore. Simple syscalls (getpid, mmap) work fine. Complex functions (malloc) may hit PAC-authenticated internal calls with the wrong key.
 
-4. **`machine_thread_set_state` flow** (from opcodex at 0xfffffff007feda18):
+4. **`machine_thread_set_state` flow** (from IDA Pro at 0xfffffff007feda18):
    - Calls `_ml_check_signed_state` (PACGA hash validation of CURRENT saved state)
    - Checks KERNEL_SIGNED flags in incoming state: if SET → **kernel panic** (`brk #0`)
    - If flags CLEAR: writes incoming values to saved state, calls `_ml_sign_thread_state` to re-sign PACGA hash
@@ -635,7 +642,7 @@ Example from REPL:
 
 ## Jetsam / Memorystatus Control (iPad 18.3.2)
 
-From opcodex disassembly of memorystatus_control at 0xfffffff00833aa3c:
+From IDA Pro disassembly of memorystatus_control at 0xfffffff00833aa3c:
 
 | CMD | Name | Handler | Args | Effect |
 |-----|------|---------|------|--------|
@@ -660,7 +667,7 @@ Note: memorystatus_control returns errors (carry=1) when called from non-root pr
 
 ## Guard AST Crash Path (iPad 18.3.2)
 
-From crash log analysis and opcodex:
+From crash log analysis and IDA Pro:
 
 Mach port guard exceptions (guard_type=1, subcode <= 0x80) are **unconditionally fatal**:
 ```

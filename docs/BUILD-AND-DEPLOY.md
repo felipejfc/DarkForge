@@ -87,3 +87,15 @@ ios-deploy --id "$DEVICE_ID" \
   --bundle "$APP_PATH" \
   --no-wifi
 ```
+
+## GitHub release automation
+
+Release automation lives in [`../.github/workflows/release.yml`](../.github/workflows/release.yml).
+It builds:
+
+- an unsigned iOS `.ipa` for Sideloadly-style install flows
+- a macOS desktop `.dmg`
+
+Those assets are attached to the GitHub release for a matching `v*` tag. See
+[`GITHUB-RELEASES.md`](./GITHUB-RELEASES.md) for the packaging details and the
+tag-based release flow.

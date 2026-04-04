@@ -3,7 +3,7 @@
 # PyInstaller spec for DarkForge kserver.
 #
 # Produces a single-file executable that bundles kserver.py along with
-# the webui/ static assets and skills/ directory. At runtime, kserver
+# the webui/ static assets and built-in skills/ and libraries/ directories. At runtime, kserver
 # resolves those paths via sys._MEIPASS (handled in kserver.py).
 #
 # Build:
@@ -21,6 +21,7 @@ TOOLS_DIR = PROJECT_ROOT / "tools"
 datas = [
     (str(TOOLS_DIR / "webui"), "webui"),
     (str(PROJECT_ROOT / "skills"), "skills"),
+    (str(PROJECT_ROOT / "libraries"), "libraries"),
 ]
 
 a = Analysis(

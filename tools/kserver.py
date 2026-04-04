@@ -34,6 +34,11 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 try:
+    from tools.package_manager import PackageError, PackageManager
+except ModuleNotFoundError:  # pragma: no cover - script execution path
+    from package_manager import PackageError, PackageManager
+
+try:
     import websockets
     from websockets.asyncio.server import serve
 except ImportError:
@@ -75,11 +80,16 @@ def _resolve_asset_dir(env_var: str, frozen_subdir: str, default: Path) -> Path:
 
 WEB_UI_DIR = _resolve_asset_dir("DARKFORGE_WEBUI_DIR", "webui", TOOLS_DIR / "webui")
 SKILLS_DIR = _resolve_asset_dir("DARKFORGE_SKILLS_DIR", "skills", PROJECT_DIR / "skills")
+LIBRARIES_DIR = _resolve_asset_dir("DARKFORGE_LIBRARIES_DIR", "libraries", PROJECT_DIR / "libraries")
 CONTROL_ROOT = "/var/mobile/Media/DarkForge/Control"
 DEFAULT_SKILL_RUNTIME = "jscbridge"
 VALID_SKILL_RUNTIMES = {DEFAULT_SKILL_RUNTIME}
 VALID_SKILL_INPUT_TYPES = {"text", "boolean", "select", "app"}
 VALID_SKILL_EXECUTION_MODES = {"interactive", "job"}
+package_manager = PackageManager(
+    builtin_skills_dir=SKILLS_DIR,
+    builtin_libraries_dir=LIBRARIES_DIR,
+)
 
 # ---------------------------------------------------------------------------
 # ANSI colours
@@ -730,29 +740,41 @@ async def _exec_via_agent(code: str, timeout: float) -> dict | None:
         return None
 
 
-async def exec_code(code: str, timeout: float = EXEC_TIMEOUT, runtime: str | None = None, *, prefer_agent: bool = True, target: str | None = None) -> dict | None:
+async def exec_code(
+    code: str,
+    timeout: float = EXEC_TIMEOUT,
+    runtime: str | None = None,
+    *,
+    prefer_agent: bool = True,
+    target: str | None = None,
+    library_dependencies: list[str] | None = None,
+) -> dict | None:
     """Send code to the preferred device runtime and wait for the result.
 
     target: "agent" forces launchd agent, "bridge" forces app WebSocket,
             None / "auto" uses the default prefer_agent heuristic.
     """
+    prepared_code = code
+    if (runtime or DEFAULT_SKILL_RUNTIME) == DEFAULT_SKILL_RUNTIME:
+        prepared_code = package_manager.preprocess_code(code, library_dependencies=library_dependencies)
+
     if target == "agent":
         if _has_agent_runtime():
-            return await _exec_via_agent(code, timeout)
+            return await _exec_via_agent(prepared_code, timeout)
         _print_error("launchd agent is not connected.")
         return None
     if target == "bridge":
         if _has_app_runtime():
-            return await _exec_via_app_ws(code, timeout, runtime=runtime)
+            return await _exec_via_app_ws(prepared_code, timeout, runtime=runtime)
         _print_error("App bridge is not connected.")
         return None
     # Auto: original heuristic
     if prefer_agent and runtime == DEFAULT_SKILL_RUNTIME and _has_agent_runtime():
-        return await _exec_via_agent(code, timeout)
+        return await _exec_via_agent(prepared_code, timeout)
     if _has_app_runtime():
-        return await _exec_via_app_ws(code, timeout, runtime=runtime)
+        return await _exec_via_app_ws(prepared_code, timeout, runtime=runtime)
     if _has_agent_runtime():
-        return await _exec_via_agent(code, timeout)
+        return await _exec_via_agent(prepared_code, timeout)
     _print_error("Not connected to device.")
     return None
 
@@ -1417,48 +1439,6 @@ def _slugify(name: str) -> str:
     return slug or f"skill-{uuid.uuid4().hex[:8]}"
 
 
-def _skill_file(skill_id: str) -> Path:
-    safe_id = re.sub(r"[^a-z0-9-]+", "-", skill_id.strip().lower()).strip("-")
-    if not safe_id:
-        raise ValueError("Invalid skill id")
-    return SKILLS_DIR / f"{safe_id}.json"
-
-
-def _ensure_skills_dir():
-    SKILLS_DIR.mkdir(parents=True, exist_ok=True)
-
-
-def _normalize_skill_entry_file(entry_file) -> str:
-    value = str(entry_file or "").strip().replace("\\", "/")
-    if not value:
-        return ""
-    candidate = Path(value)
-    if candidate.is_absolute() or ".." in candidate.parts:
-        raise ValueError("Skill entryFile must stay inside the skills directory")
-    if candidate.suffix.lower() != ".js":
-        raise ValueError("Skill entryFile must point to a .js file")
-    normalized = candidate.as_posix().lstrip("./")
-    if not normalized:
-        raise ValueError("Skill entryFile must not be empty")
-    return normalized
-
-
-def _skill_entry_path(entry_file: str) -> Path:
-    normalized = _normalize_skill_entry_file(entry_file)
-    candidate = (SKILLS_DIR / normalized).resolve()
-    skills_root = SKILLS_DIR.resolve()
-    if not candidate.is_relative_to(skills_root):
-        raise ValueError("Skill entryFile escaped the skills directory")
-    return candidate
-
-
-def _read_skill_entry_file(entry_file: str) -> str:
-    path = _skill_entry_path(entry_file)
-    if not path.exists():
-        raise FileNotFoundError(f"Skill entry file not found: {entry_file}")
-    return path.read_text(encoding="utf-8")
-
-
 def _coerce_bool(value) -> bool:
     if isinstance(value, bool):
         return value
@@ -1470,116 +1450,6 @@ def _coerce_bool(value) -> bool:
     if text in {"0", "false", "no", "off", ""}:
         return False
     raise ValueError(f"Invalid boolean value: {value}")
-
-
-def _normalize_select_options(raw_options) -> list[dict]:
-    if not isinstance(raw_options, list) or not raw_options:
-        raise ValueError("Select inputs require a non-empty options list")
-
-    options = []
-    seen = set()
-    for raw_option in raw_options:
-        if isinstance(raw_option, dict):
-            value = str(raw_option.get("value", "")).strip()
-            label = str(raw_option.get("label", value)).strip()
-        else:
-            value = str(raw_option).strip()
-            label = value
-        if not value:
-            raise ValueError("Select option values cannot be empty")
-        if value in seen:
-            continue
-        seen.add(value)
-        options.append({"value": value, "label": label or value})
-
-    if not options:
-        raise ValueError("Select inputs require at least one option")
-    return options
-
-
-def _normalize_skill_inputs(raw_inputs) -> list[dict]:
-    if raw_inputs in (None, ""):
-        return []
-    if not isinstance(raw_inputs, list):
-        raise ValueError("Skill inputs must be a list")
-
-    normalized = []
-    seen_ids = set()
-    for index, raw_input in enumerate(raw_inputs):
-        if not isinstance(raw_input, dict):
-            raise ValueError(f"Skill input at index {index} must be an object")
-
-        input_id = _slugify(str(raw_input.get("id") or raw_input.get("label") or f"input-{index + 1}"))
-        if input_id in seen_ids:
-            raise ValueError(f"Duplicate skill input id: {input_id}")
-        seen_ids.add(input_id)
-
-        input_type = str(raw_input.get("type") or "text").strip().lower()
-        if input_type not in VALID_SKILL_INPUT_TYPES:
-            raise ValueError(f"Unsupported skill input type: {input_type}")
-
-        label = str(raw_input.get("label") or input_id.replace("-", " ").title()).strip()
-        placeholder = str(raw_input.get("placeholder") or "").strip()
-        required = _coerce_bool(raw_input.get("required", False))
-
-        entry = {
-            "id": input_id,
-            "label": label or input_id,
-            "type": input_type,
-            "required": required,
-        }
-
-        if input_type == "boolean":
-            entry["defaultValue"] = _coerce_bool(raw_input.get("defaultValue", False))
-        elif input_type == "select":
-            options = _normalize_select_options(raw_input.get("options"))
-            default_value = str(raw_input.get("defaultValue") or options[0]["value"]).strip()
-            allowed = {option["value"] for option in options}
-            if default_value not in allowed:
-                default_value = options[0]["value"]
-            entry["options"] = options
-            entry["defaultValue"] = default_value
-        else:
-            entry["defaultValue"] = str(raw_input.get("defaultValue") or "")
-            if placeholder:
-                entry["placeholder"] = placeholder
-
-        normalized.append(entry)
-
-    return normalized
-
-
-def _normalize_skill_payload(payload: dict, *, require_name: bool) -> dict:
-    if not isinstance(payload, dict):
-        raise ValueError("Skill payload must be an object")
-
-    name = str(payload.get("name", "")).strip()
-    summary = str(payload.get("summary", "")).strip()
-    entry_file = _normalize_skill_entry_file(payload.get("entryFile"))
-    code = str(payload.get("code", ""))
-    if entry_file and not code.strip():
-        code = _read_skill_entry_file(entry_file)
-    runtime = str(payload.get("runtime") or DEFAULT_SKILL_RUNTIME).strip().lower()
-    execution_mode = str(payload.get("executionMode") or "interactive").strip().lower()
-
-    if require_name and not name:
-        raise ValueError("Skill name is required")
-    if not code.strip():
-        raise ValueError("Skill code is required")
-    if runtime not in VALID_SKILL_RUNTIMES:
-        raise ValueError(f"Unsupported skill runtime: {runtime}")
-    if execution_mode not in VALID_SKILL_EXECUTION_MODES:
-        raise ValueError(f"Unsupported skill execution mode: {execution_mode}")
-
-    return {
-        "name": name,
-        "summary": summary,
-        "code": code,
-        "runtime": runtime,
-        "executionMode": execution_mode,
-        "inputs": _normalize_skill_inputs(payload.get("inputs")),
-        "entryFile": entry_file,
-    }
 
 
 def _coerce_skill_input_values(input_defs: list[dict], raw_values) -> dict:
@@ -1625,93 +1495,19 @@ def _wrap_skill_code(code: str, input_values: dict) -> str:
 
 
 def _load_skill(skill_id: str) -> dict:
-    path = _skill_file(skill_id)
-    if not path.exists():
-        raise FileNotFoundError(skill_id)
-    raw_payload = json.loads(path.read_text(encoding="utf-8"))
-    payload = _normalize_skill_payload(raw_payload, require_name=False)
-    payload["createdAt"] = raw_payload.get("createdAt")
-    payload["updatedAt"] = raw_payload.get("updatedAt")
-    payload["id"] = path.stem
-    return payload
+    return package_manager.load_skill(skill_id)
 
 
 def _list_skills() -> list[dict]:
-    _ensure_skills_dir()
-    skills = []
-    for path in SKILLS_DIR.glob("*.json"):
-        try:
-            raw_payload = json.loads(path.read_text(encoding="utf-8"))
-            payload = _normalize_skill_payload(raw_payload, require_name=False)
-        except (OSError, json.JSONDecodeError, ValueError):
-            continue
-        skills.append({
-            "id": path.stem,
-            "name": payload.get("name", path.stem),
-            "summary": payload.get("summary", ""),
-            "runtime": payload.get("runtime", DEFAULT_SKILL_RUNTIME),
-            "executionMode": payload.get("executionMode", "interactive"),
-            "inputCount": len(payload.get("inputs", [])),
-            "entryFile": payload.get("entryFile", ""),
-            "createdAt": raw_payload.get("createdAt"),
-            "updatedAt": raw_payload.get("updatedAt"),
-        })
-    skills.sort(key=lambda item: item.get("updatedAt") or "", reverse=True)
-    return skills
+    return package_manager.list_skills()
 
 
 def _save_skill(payload: dict) -> dict:
-    _ensure_skills_dir()
-    normalized = _normalize_skill_payload(payload, require_name=True)
-    name = normalized["name"]
-    previous_id = str(payload.get("previousId") or payload.get("id") or "").strip()
-
-    skill_id = _slugify(str(payload.get("id", "")).strip() or name)
-    path = _skill_file(skill_id)
-    now = _utc_now_iso()
-    created_at = now
-
-    if path.exists():
-        try:
-            existing = json.loads(path.read_text(encoding="utf-8"))
-            created_at = existing.get("createdAt", now)
-        except (OSError, json.JSONDecodeError):
-            created_at = now
-
-    if previous_id and previous_id != skill_id:
-        previous_path = _skill_file(previous_id)
-        if previous_path.exists():
-            previous_path.unlink()
-
-    stored = {
-        "name": normalized["name"],
-        "summary": normalized["summary"],
-        "runtime": normalized["runtime"],
-        "executionMode": normalized["executionMode"],
-        "inputs": normalized["inputs"],
-        "createdAt": created_at,
-        "updatedAt": now,
-    }
-
-    if normalized["entryFile"]:
-        entry_path = _skill_entry_path(normalized["entryFile"])
-        entry_path.parent.mkdir(parents=True, exist_ok=True)
-        entry_path.write_text(normalized["code"], encoding="utf-8")
-        stored["entryFile"] = normalized["entryFile"]
-    else:
-        stored["code"] = normalized["code"]
-
-    path.write_text(json.dumps(stored, indent=2) + "\n", encoding="utf-8")
-    stored["id"] = skill_id
-    stored["code"] = normalized["code"]
-    return stored
+    return package_manager.save_skill(payload)
 
 
 def _delete_skill(skill_id: str):
-    path = _skill_file(skill_id)
-    if not path.exists():
-        raise FileNotFoundError(skill_id)
-    path.unlink()
+    package_manager.delete_skill(skill_id)
 
 
 def _resolve_static_path(url_path: str) -> Path | None:
@@ -1728,9 +1524,16 @@ async def _exec_from_body(body: bytes) -> dict:
     code = str(req.get("code", ""))
     runtime = str(req.get("runtime") or "").strip().lower() or None
     target = str(req.get("target") or "").strip().lower() or None
+    library_dependencies = list(req.get("libraryDependencies", []) or [])
     if not _has_remote_runtime():
         return {"error": "Device not connected"}
-    result = await exec_code(code, timeout=EXEC_TIMEOUT * 4, runtime=runtime, target=target)
+    result = await exec_code(
+        code,
+        timeout=EXEC_TIMEOUT * 4,
+        runtime=runtime,
+        target=target,
+        library_dependencies=library_dependencies,
+    )
     return result or {"error": "No response from device"}
 
 
@@ -1743,31 +1546,45 @@ async def _run_skill_from_body(body: bytes) -> dict:
         skill_payload = _load_skill(skill_id)
     else:
         skill_payload = {
+            "id": str(req.get("id") or "").strip(),
             "name": req.get("name", ""),
             "summary": req.get("summary", ""),
             "code": req.get("code", ""),
-            "runtime": req.get("runtime", DEFAULT_SKILL_RUNTIME),
-            "inputs": req.get("inputs", []),
+            "runtime": str(req.get("runtime") or DEFAULT_SKILL_RUNTIME).strip().lower(),
+            "executionMode": str(req.get("executionMode") or "interactive").strip().lower(),
+            "inputs": list(req.get("inputs", []) or []),
             "entryFile": req.get("entryFile", ""),
+            "libraryDependencies": list(req.get("libraryDependencies", []) or []),
         }
 
-    normalized = _normalize_skill_payload(skill_payload, require_name=False)
-    input_values = _coerce_skill_input_values(normalized["inputs"], req.get("inputValues"))
-    wrapped_code = _wrap_skill_code(normalized["code"], input_values)
+    runtime = str(skill_payload.get("runtime") or DEFAULT_SKILL_RUNTIME).strip().lower()
+    execution_mode = str(skill_payload.get("executionMode") or "interactive").strip().lower()
+    if runtime not in VALID_SKILL_RUNTIMES:
+        return {"error": f"Unsupported skill runtime: {runtime}"}
+    if execution_mode not in VALID_SKILL_EXECUTION_MODES:
+        return {"error": f"Unsupported skill execution mode: {execution_mode}"}
 
-    if normalized["runtime"] == DEFAULT_SKILL_RUNTIME and not _has_remote_runtime():
+    code = str(skill_payload.get("code") or "")
+    if not code.strip():
+        return {"error": "Skill code is required"}
+
+    input_values = _coerce_skill_input_values(skill_payload.get("inputs", []), req.get("inputValues"))
+    wrapped_code = _wrap_skill_code(code, input_values)
+    library_dependencies = list(skill_payload.get("libraryDependencies", []) or [])
+
+    if runtime == DEFAULT_SKILL_RUNTIME and not _has_remote_runtime():
         return {"error": "JSCBridge runtime requires a connected device"}
 
-    if normalized["executionMode"] == "job":
+    if execution_mode == "job":
         job_id = str(uuid.uuid4())
         job = _upsert_job(
             job_id,
-            skillId=skill_id or _slugify(normalized["name"] or "skill"),
-            name=normalized["name"] or skill_id or "Skill Job",
-            runtime=normalized["runtime"],
-            executionMode=normalized["executionMode"],
+            skillId=skill_id or _slugify(str(skill_payload.get("name") or "skill")),
+            name=str(skill_payload.get("name") or skill_id or "Skill Job"),
+            runtime=runtime,
+            executionMode=execution_mode,
             status="queued",
-            code=wrapped_code,
+            code=package_manager.preprocess_code(wrapped_code, library_dependencies=library_dependencies),
         )
         try:
             await _submit_job_to_agent(job)
@@ -1778,11 +1595,17 @@ async def _run_skill_from_body(body: bytes) -> dict:
         await _emit_status_event()
         return {"ok": True, "jobId": job_id, "status": job["status"], "executionMode": "job"}
 
-    result = await exec_code(wrapped_code, timeout=EXEC_TIMEOUT * 10, runtime=normalized["runtime"], target=target)
+    result = await exec_code(
+        wrapped_code,
+        timeout=EXEC_TIMEOUT * 10,
+        runtime=runtime,
+        target=target,
+        library_dependencies=library_dependencies,
+    )
     if result is None:
         return {"error": "No response from device"}
     result["skillInput"] = input_values
-    result["executionMode"] = normalized["executionMode"]
+    result["executionMode"] = execution_mode
     return result
 
 
@@ -2164,6 +1987,25 @@ async def _route_http(method: str, path: str, body: bytes) -> tuple[int, bytes, 
     if route == "/api/apps" and method == "GET":
         return _json_response(await _list_apps_handler())
 
+    if route == "/api/packages" and method == "GET":
+        return _json_response({"packages": package_manager.list_packages()})
+
+    if route == "/api/libraries" and method == "GET":
+        return _json_response({"libraries": package_manager.list_libraries()})
+
+    if route == "/api/runtime/catalog" and method == "GET":
+        return _json_response(package_manager.get_runtime_catalog())
+
+    if route == "/api/package-import/preview" and method == "POST":
+        payload = json.loads(body.decode("utf-8") or "{}")
+        source = str(payload.get("source") or payload.get("url") or "").strip()
+        return _json_response(package_manager.preview_package(source))
+
+    if route == "/api/package-import/install" and method == "POST":
+        payload = json.loads(body.decode("utf-8") or "{}")
+        source = str(payload.get("source") or payload.get("url") or "").strip()
+        return _json_response(package_manager.install_package(source), status=201)
+
     if route == "/api/skills" and method == "GET":
         return _json_response({"skills": _list_skills()})
 
@@ -2178,6 +2020,28 @@ async def _route_http(method: str, path: str, body: bytes) -> tuple[int, bytes, 
         if method == "DELETE":
             _delete_skill(skill_id)
             return _json_response({"ok": True})
+        return _json_response({"error": f"Method not allowed: {method}"}, status=405)
+
+    if route.startswith("/api/packages/"):
+        package_path = unquote(route.removeprefix("/api/packages/")).strip("/")
+        if package_path.endswith("/check-update") and method == "POST":
+            package_id = package_path.removesuffix("/check-update")
+            return _json_response(package_manager.check_package_update(package_id))
+        if package_path.endswith("/update") and method == "POST":
+            package_id = package_path.removesuffix("/update")
+            return _json_response(package_manager.update_package(package_id))
+        if method == "DELETE":
+            package_manager.delete_package(package_path)
+            return _json_response({"ok": True})
+        return _json_response({"error": f"Method not allowed: {method}"}, status=405)
+
+    if route.startswith("/api/libraries/"):
+        library_path = unquote(route.removeprefix("/api/libraries/")).strip("/")
+        if library_path.endswith("/toggle") and method == "POST":
+            module_id = library_path.removesuffix("/toggle")
+            payload = json.loads(body.decode("utf-8") or "{}")
+            enabled = bool(payload.get("enabled", False))
+            return _json_response(package_manager.set_library_enabled(module_id, enabled))
         return _json_response({"error": f"Method not allowed: {method}"}, status=405)
 
     if route == "/upload" and method == "POST":
@@ -2283,7 +2147,7 @@ async def _http_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
         status, resp_bytes, content_type = await _route_http(method, path, body)
         await _send_http_response(writer, status, resp_bytes, content_type)
     except FileNotFoundError as e:
-        status, resp_bytes, content_type = _json_response({"error": f"Skill not found: {e.args[0]}"}, status=404)
+        status, resp_bytes, content_type = _json_response({"error": f"Not found: {e.args[0]}"}, status=404)
         await _send_http_response(writer, status, resp_bytes, content_type)
     except (ValueError, json.JSONDecodeError) as e:
         status, resp_bytes, content_type = _json_response({"error": str(e)}, status=400)

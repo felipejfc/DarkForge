@@ -169,12 +169,14 @@ final class InstalledAppService {
 // MARK: - Skill Data Model
 
 private struct SkillDefinition: Decodable {
+    let id: String?
     let name: String
     let summary: String
     let runtime: String
     let executionMode: String
     let entryFile: String?
     let inputs: [SkillInput]
+    let libraryDependencies: [String]?
 
     struct SkillInput: Decodable {
         let id: String
@@ -239,6 +241,555 @@ private struct SkillDefinition: Decodable {
     }
 }
 
+private struct PackageEntryReference: Codable {
+    let id: String?
+    let manifestPath: String
+}
+
+private struct InstalledPackageInfo: Codable {
+    struct PackageMetadata: Codable {
+        let id: String
+        let name: String
+        let summary: String
+        let author: String
+        let homepage: String
+    }
+
+    struct SourceMetadata: Codable {
+        let repoUrl: String
+        let ref: String
+        let resolvedCommit: String
+        let subpath: String
+    }
+
+    let package: PackageMetadata
+    let source: SourceMetadata
+    let skills: [PackageEntryReference]
+    let libraries: [PackageEntryReference]
+    var libraryState: [String: Bool]
+    let installedAt: String
+    let updatedAt: String
+}
+
+private struct LibraryDefinition: Decodable {
+    let id: String?
+    let name: String
+    let summary: String?
+    let entryFile: String
+    let version: String?
+    let exposureMode: String?
+    let namespace: String?
+    let moduleId: String?
+    let dependencies: [String]?
+    let enabledByDefault: Bool?
+}
+
+private struct SkillSource {
+    let type: String
+    let packageId: String?
+    let packageName: String?
+    let repoURL: String?
+    let ref: String?
+    let manifestURL: URL
+    let entryURL: URL?
+}
+
+private typealias SkillListEntry = (json: String, definition: SkillDefinition, source: SkillSource)
+
+private enum PackageImportError: LocalizedError {
+    case invalidSource
+    case invalidResponse
+    case invalidPackageIndex
+    case missingFile(String)
+    case invalidManifest(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidSource:
+            return "Package source must be a GitHub URL or owner/repo[@ref]."
+        case .invalidResponse:
+            return "Unexpected response while fetching the package."
+        case .invalidPackageIndex:
+            return "darkforge-package.json is missing or invalid."
+        case .missingFile(let path):
+            return "Missing package file: \(path)"
+        case .invalidManifest(let message):
+            return message
+        }
+    }
+}
+
+private final class SkillsPackageStore {
+    static let shared = SkillsPackageStore()
+
+    private struct PackageDescriptor {
+        let owner: String
+        let repo: String
+        let ref: String
+        let subpath: String
+        let repoURL: String
+    }
+
+    private struct PackageIndex: Codable {
+        struct PackageMetadata: Codable {
+            let id: String?
+            let name: String
+            let summary: String?
+            let author: String?
+            let homepage: String?
+        }
+
+        let schemaVersion: Int?
+        let package: PackageMetadata
+        let skills: [PackageEntryReference]?
+        let libraries: [PackageEntryReference]?
+    }
+
+    private let session: URLSession = {
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 20
+        config.timeoutIntervalForResource = 40
+        return URLSession(configuration: config)
+    }()
+
+    private let fileManager = FileManager.default
+
+    private init() {}
+
+    private var packagesRootURL: URL {
+        let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let root = base.appendingPathComponent("DarkForgePackages", isDirectory: true)
+        try? fileManager.createDirectory(at: root, withIntermediateDirectories: true, attributes: nil)
+        return root
+    }
+
+    func loadInstalledPackages() -> [InstalledPackageInfo] {
+        let root = packagesRootURL
+        guard let urls = try? fileManager.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) else {
+            return []
+        }
+        let decoder = JSONDecoder()
+        return urls.compactMap { url in
+            guard let data = try? Data(contentsOf: url.appendingPathComponent("package-install.json")),
+                  let info = try? decoder.decode(InstalledPackageInfo.self, from: data) else {
+                return nil
+            }
+            return info
+        }.sorted { $0.package.name.localizedCaseInsensitiveCompare($1.package.name) == .orderedAscending }
+    }
+
+    func loadInstalledSkills() -> [SkillListEntry] {
+        let decoder = JSONDecoder()
+        var entries: [SkillListEntry] = []
+        for info in loadInstalledPackages() {
+            let packageRoot = packagesRootURL.appendingPathComponent(info.package.id, isDirectory: true)
+            let sourceRoot = packageRoot.appendingPathComponent("source", isDirectory: true)
+            for entry in info.skills {
+                let manifestURL = sourceRoot.appendingPathComponent(entry.manifestPath)
+                guard let data = try? Data(contentsOf: manifestURL),
+                      let definition = try? decoder.decode(SkillDefinition.self, from: data) else {
+                    continue
+                }
+                let entryURL = definition.entryFile.map { manifestURL.deletingLastPathComponent().appendingPathComponent($0) }
+                entries.append((
+                    json: entry.id ?? manifestURL.deletingPathExtension().lastPathComponent,
+                    definition: definition,
+                    source: SkillSource(
+                        type: "linked",
+                        packageId: info.package.id,
+                        packageName: info.package.name,
+                        repoURL: info.source.repoUrl,
+                        ref: info.source.ref,
+                        manifestURL: manifestURL,
+                        entryURL: entryURL
+                    )
+                ))
+            }
+        }
+        return entries
+    }
+
+    func uninstallPackage(packageId: String) throws {
+        let target = packagesRootURL.appendingPathComponent(packageId, isDirectory: true)
+        guard fileManager.fileExists(atPath: target.path) else { throw PackageImportError.missingFile(packageId) }
+        try fileManager.removeItem(at: target)
+    }
+
+    func importPackage(from source: String, completion: @escaping (Result<InstalledPackageInfo, Error>) -> Void) {
+        Task.detached(priority: .userInitiated) {
+            do {
+                let package = try await self.installPackage(from: source)
+                await MainActor.run { completion(.success(package)) }
+            } catch {
+                await MainActor.run { completion(.failure(error)) }
+            }
+        }
+    }
+
+    func syncInstalledPackages(completion: @escaping (Result<Int, Error>) -> Void) {
+        let packages = loadInstalledPackages()
+        Task.detached(priority: .userInitiated) {
+            do {
+                for info in packages {
+                    let source = self.rebuildSourceURL(from: info.source)
+                    _ = try await self.installPackage(from: source)
+                }
+                await MainActor.run { completion(.success(packages.count)) }
+            } catch {
+                await MainActor.run { completion(.failure(error)) }
+            }
+        }
+    }
+
+    func preprocessSkillCode(_ code: String) -> String {
+        let libraries = loadEnabledLibraries()
+        let config = libraries.map { library in
+            [
+                "id": library.moduleId,
+                "aliases": library.aliases,
+                "enabled": true,
+                "namespace": library.namespace ?? "",
+                "exposureMode": library.exposureMode,
+            ] as [String : Any]
+        }
+        let configJSON = Self.jsonString(config) ?? "[]"
+        let definitions = libraries.map { library in
+            let metaJSON = Self.jsonString([
+                "id": library.moduleId,
+                "aliases": library.aliases,
+                "namespace": library.namespace ?? "",
+                "exposureMode": library.exposureMode,
+            ]) ?? "{}"
+            return """
+            globalThis.__darkforgeRuntime.define(\(metaJSON), function(module, exports, require, globalThis) {
+              return (function(module, exports, require, globalThis) {
+            \(library.code)
+              }).call(globalThis, module, exports, require, globalThis);
+            });
+            """
+        }.joined(separator: "\n")
+
+        return """
+        (function(){
+        if (!globalThis.__darkforgeRuntime) {
+          const factories = Object.create(null);
+          const cache = Object.create(null);
+          const metaById = Object.create(null);
+          let enabledMap = Object.create(null);
+          let aliasMap = Object.create(null);
+          let aliasConflicts = Object.create(null);
+          const namespaces = Object.create(null);
+          if (!globalThis.Libraries || typeof globalThis.Libraries !== "object") globalThis.Libraries = {};
+          const assignGlobal = (id, meta, value) => {
+            if (!meta || !meta.namespace || (meta.exposureMode !== "global" && meta.exposureMode !== "hybrid")) return;
+            globalThis.Libraries[meta.namespace] = value;
+            namespaces[id] = meta.namespace;
+          };
+          const cleanup = () => {
+            for (const id of Object.keys(namespaces)) {
+              if (!enabledMap[id]) {
+                const namespace = namespaces[id];
+                if (namespace && Object.prototype.hasOwnProperty.call(globalThis.Libraries, namespace)) delete globalThis.Libraries[namespace];
+                delete namespaces[id];
+                delete cache[id];
+              }
+            }
+          };
+          const resolve = (request) => {
+            const wanted = String(request || "").trim();
+            if (!wanted) throw new Error('require() expects a library id');
+            if (enabledMap[wanted] && factories[wanted]) return wanted;
+            if (Object.prototype.hasOwnProperty.call(aliasConflicts, wanted)) {
+              throw new Error('Ambiguous library alias "' + wanted + '". Use one of: ' + aliasConflicts[wanted].join(', '));
+            }
+            const resolved = aliasMap[wanted];
+            if (resolved && enabledMap[resolved] && factories[resolved]) return resolved;
+            throw new Error('Cannot require library "' + wanted + '"');
+          };
+          const requireFn = (request) => {
+            const id = resolve(request);
+            if (cache[id]) return cache[id].exports;
+            const factory = factories[id];
+            const module = { id, exports: {} };
+            cache[id] = module;
+            const returned = factory(module, module.exports, requireFn, globalThis);
+            if (returned !== undefined) module.exports = returned;
+            assignGlobal(id, metaById[id], module.exports);
+            return module.exports;
+          };
+          globalThis.__darkforgeRuntime = {
+            configure(entries) {
+              enabledMap = Object.create(null);
+              aliasMap = Object.create(null);
+              aliasConflicts = Object.create(null);
+              for (const entry of entries || []) {
+                if (!entry || !entry.id) continue;
+                enabledMap[entry.id] = !!entry.enabled;
+                const aliases = Array.isArray(entry.aliases) ? entry.aliases : [];
+                for (const rawAlias of aliases) {
+                  const alias = String(rawAlias || "").trim();
+                  if (!alias) continue;
+                  if (aliasMap[alias] && aliasMap[alias] !== entry.id) {
+                    aliasConflicts[alias] = [aliasMap[alias], entry.id].filter((value, index, array) => array.indexOf(value) === index);
+                    delete aliasMap[alias];
+                  } else if (!aliasConflicts[alias]) {
+                    aliasMap[alias] = entry.id;
+                  }
+                }
+              }
+              cleanup();
+            },
+            define(meta, factory) {
+              const id = String(meta && meta.id || "").trim();
+              if (!id) return;
+              metaById[id] = Object.assign({}, meta || {});
+              factories[id] = factory;
+              if (enabledMap[id] && (metaById[id].exposureMode === "global" || metaById[id].exposureMode === "hybrid")) {
+                assignGlobal(id, metaById[id], requireFn(id));
+              }
+            },
+            require: requireFn,
+          };
+          globalThis.require = requireFn;
+        }
+        globalThis.__darkforgeRuntime.configure(\(configJSON));
+        \(definitions)
+        })();
+        \(code)
+        """
+    }
+
+    private struct LoadedLibrary {
+        let moduleId: String
+        let namespace: String?
+        let exposureMode: String
+        let aliases: [String]
+        let code: String
+    }
+
+    private func loadEnabledLibraries() -> [LoadedLibrary] {
+        let decoder = JSONDecoder()
+        var loaded: [LoadedLibrary] = []
+        for info in loadInstalledPackages() {
+            let packageRoot = packagesRootURL.appendingPathComponent(info.package.id, isDirectory: true)
+            let sourceRoot = packageRoot.appendingPathComponent("source", isDirectory: true)
+            for ref in info.libraries {
+                let manifestURL = sourceRoot.appendingPathComponent(ref.manifestPath)
+                guard let data = try? Data(contentsOf: manifestURL),
+                      let definition = try? decoder.decode(LibraryDefinition.self, from: data) else {
+                    continue
+                }
+                let libraryId = slugify(definition.id ?? manifestURL.deletingPathExtension().lastPathComponent, prefix: "library")
+                let moduleId = definition.moduleId ?? "\(info.package.id)/\(libraryId)"
+                let enabled = info.libraryState[moduleId] ?? (definition.enabledByDefault ?? true)
+                guard enabled else { continue }
+                let entryURL = manifestURL.deletingLastPathComponent().appendingPathComponent(definition.entryFile)
+                guard let code = try? String(contentsOf: entryURL, encoding: .utf8) else { continue }
+                var aliases = [libraryId, moduleId.components(separatedBy: "/").last ?? libraryId]
+                if let namespace = definition.namespace, !namespace.isEmpty {
+                    aliases.append(namespace)
+                }
+                loaded.append(LoadedLibrary(
+                    moduleId: moduleId,
+                    namespace: definition.namespace,
+                    exposureMode: definition.exposureMode ?? "module",
+                    aliases: Array(Set(aliases.filter { !$0.isEmpty })).sorted(),
+                    code: code
+                ))
+            }
+        }
+        return loaded
+    }
+
+    private func installPackage(from source: String) async throws -> InstalledPackageInfo {
+        let descriptor = try Self.parseSource(source)
+        let commit = try await resolveCommit(for: descriptor)
+        let index = try await fetchPackageIndex(descriptor: descriptor, commit: commit)
+        let packageId = slugify(index.package.id ?? index.package.name, prefix: "package")
+        let packageRoot = packagesRootURL.appendingPathComponent(packageId, isDirectory: true)
+        if fileManager.fileExists(atPath: packageRoot.path) {
+            try fileManager.removeItem(at: packageRoot)
+        }
+        let sourceRoot = packageRoot.appendingPathComponent("source", isDirectory: true)
+        try fileManager.createDirectory(at: sourceRoot, withIntermediateDirectories: true, attributes: nil)
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let decoder = JSONDecoder()
+        let rawIndexData = try encoder.encode(index)
+        try rawIndexData.write(to: sourceRoot.appendingPathComponent("darkforge-package.json"))
+
+        for ref in index.skills ?? [] {
+            try await writeRemoteFile(ref.manifestPath, descriptor: descriptor, commit: commit, to: sourceRoot)
+            let manifestData = try Data(contentsOf: sourceRoot.appendingPathComponent(ref.manifestPath))
+            let definition = try decoder.decode(SkillDefinition.self, from: manifestData)
+            if let entryFile = definition.entryFile {
+                let entryPath = Self.normalizeRelativePath((ref.manifestPath as NSString).deletingLastPathComponent + "/" + entryFile)
+                try await writeRemoteFile(entryPath, descriptor: descriptor, commit: commit, to: sourceRoot)
+            }
+        }
+
+        for ref in index.libraries ?? [] {
+            try await writeRemoteFile(ref.manifestPath, descriptor: descriptor, commit: commit, to: sourceRoot)
+            let manifestData = try Data(contentsOf: sourceRoot.appendingPathComponent(ref.manifestPath))
+            let definition = try decoder.decode(LibraryDefinition.self, from: manifestData)
+            let entryPath = Self.normalizeRelativePath((ref.manifestPath as NSString).deletingLastPathComponent + "/" + definition.entryFile)
+            try await writeRemoteFile(entryPath, descriptor: descriptor, commit: commit, to: sourceRoot)
+        }
+
+        let installInfo = InstalledPackageInfo(
+            package: .init(
+                id: packageId,
+                name: index.package.name,
+                summary: index.package.summary ?? "",
+                author: index.package.author ?? "",
+                homepage: index.package.homepage ?? ""
+            ),
+            source: .init(
+                repoUrl: descriptor.repoURL,
+                ref: descriptor.ref,
+                resolvedCommit: commit,
+                subpath: descriptor.subpath
+            ),
+            skills: index.skills ?? [],
+            libraries: index.libraries ?? [],
+            libraryState: try buildInitialLibraryState(index: index, sourceRoot: sourceRoot),
+            installedAt: ISO8601DateFormatter().string(from: Date()),
+            updatedAt: ISO8601DateFormatter().string(from: Date())
+        )
+        let installData = try encoder.encode(installInfo)
+        try installData.write(to: packageRoot.appendingPathComponent("package-install.json"))
+        return installInfo
+    }
+
+    private func buildInitialLibraryState(index: PackageIndex, sourceRoot: URL) throws -> [String: Bool] {
+        let decoder = JSONDecoder()
+        var state: [String: Bool] = [:]
+        for ref in index.libraries ?? [] {
+            let manifestURL = sourceRoot.appendingPathComponent(ref.manifestPath)
+            let definition = try decoder.decode(LibraryDefinition.self, from: Data(contentsOf: manifestURL))
+            let libraryId = slugify(definition.id ?? manifestURL.deletingPathExtension().lastPathComponent, prefix: "library")
+            let moduleId = definition.moduleId ?? "\(slugify(index.package.id ?? index.package.name, prefix: "package"))/\(libraryId)"
+            state[moduleId] = definition.enabledByDefault ?? true
+        }
+        return state
+    }
+
+    private func writeRemoteFile(_ relativePath: String, descriptor: PackageDescriptor, commit: String, to sourceRoot: URL) async throws {
+        let normalized = Self.normalizeRelativePath(relativePath)
+        let target = sourceRoot.appendingPathComponent(normalized)
+        try fileManager.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: nil)
+        let text = try await fetchText(relativePath: normalized, descriptor: descriptor, commit: commit)
+        try text.write(to: target, atomically: true, encoding: .utf8)
+    }
+
+    private func fetchPackageIndex(descriptor: PackageDescriptor, commit: String) async throws -> PackageIndex {
+        let text = try await fetchText(relativePath: "darkforge-package.json", descriptor: descriptor, commit: commit)
+        guard let data = text.data(using: .utf8) else { throw PackageImportError.invalidPackageIndex }
+        let decoder = JSONDecoder()
+        guard let index = try? decoder.decode(PackageIndex.self, from: data) else {
+            throw PackageImportError.invalidPackageIndex
+        }
+        return index
+    }
+
+    private func resolveCommit(for descriptor: PackageDescriptor) async throws -> String {
+        let url = URL(string: "https://api.github.com/repos/\(descriptor.owner)/\(descriptor.repo)/commits/\(descriptor.ref.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? descriptor.ref)")!
+        let data = try await fetch(url: url, acceptJSON: true)
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let sha = object["sha"] as? String, !sha.isEmpty else {
+            throw PackageImportError.invalidResponse
+        }
+        return sha
+    }
+
+    private func fetchText(relativePath: String, descriptor: PackageDescriptor, commit: String) async throws -> String {
+        let path = descriptor.subpath.isEmpty ? Self.normalizeRelativePath(relativePath) : Self.normalizeRelativePath(descriptor.subpath + "/" + relativePath)
+        guard let encodedCommit = commit.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+              let url = URL(string: "https://raw.githubusercontent.com/\(descriptor.owner)/\(descriptor.repo)/\(encodedCommit)/\(path)") else {
+            throw PackageImportError.invalidSource
+        }
+        let data = try await fetch(url: url, acceptJSON: false)
+        guard let text = String(data: data, encoding: .utf8) else { throw PackageImportError.invalidResponse }
+        return text
+    }
+
+    private func fetch(url: URL, acceptJSON: Bool) async throws -> Data {
+        var request = URLRequest(url: url)
+        request.setValue("DarkForge/1.0", forHTTPHeaderField: "User-Agent")
+        if acceptJSON {
+            request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        }
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw PackageImportError.invalidResponse
+        }
+        return data
+    }
+
+    private func rebuildSourceURL(from source: InstalledPackageInfo.SourceMetadata) -> String {
+        if source.subpath.isEmpty {
+            return source.ref == "HEAD" ? source.repoUrl : "\(source.repoUrl)/tree/\(source.ref)"
+        }
+        return "\(source.repoUrl)/tree/\(source.ref)/\(source.subpath)"
+    }
+
+    private static func parseSource(_ source: String) throws -> PackageDescriptor {
+        let trimmed = source.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw PackageImportError.invalidSource }
+        if trimmed.hasPrefix("http://") || trimmed.hasPrefix("https://") {
+            guard let url = URL(string: trimmed), let host = url.host, host.contains("github.com") else {
+                throw PackageImportError.invalidSource
+            }
+            let parts = url.path.split(separator: "/").map(String.init)
+            guard parts.count >= 2 else { throw PackageImportError.invalidSource }
+            let owner = parts[0]
+            let repo = parts[1]
+            var ref = "HEAD"
+            var subpath = ""
+            if parts.count >= 4, parts[2] == "tree" {
+                ref = parts[3]
+                if parts.count > 4 {
+                    subpath = parts.dropFirst(4).joined(separator: "/")
+                }
+            }
+            return PackageDescriptor(owner: owner, repo: repo, ref: ref, subpath: Self.normalizeRelativePath(subpath), repoURL: "https://github.com/\(owner)/\(repo)")
+        }
+        let parts = trimmed.split(separator: "@", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
+        let repoParts = parts[0].split(separator: "/").map(String.init)
+        guard repoParts.count == 2 else { throw PackageImportError.invalidSource }
+        return PackageDescriptor(owner: repoParts[0], repo: repoParts[1], ref: parts.count > 1 ? parts[1] : "HEAD", subpath: "", repoURL: "https://github.com/\(repoParts[0])/\(repoParts[1])")
+    }
+
+    private static func jsonString(_ object: Any) -> String? {
+        guard JSONSerialization.isValidJSONObject(object),
+              let data = try? JSONSerialization.data(withJSONObject: object, options: []),
+              let string = String(data: data, encoding: .utf8) else {
+            return nil
+        }
+        return string
+    }
+
+    private static func normalizeRelativePath(_ path: String) -> String {
+        let normalized = path.replacingOccurrences(of: "\\", with: "/")
+            .split(separator: "/")
+            .filter { !$0.isEmpty && $0 != "." }
+            .joined(separator: "/")
+        return normalized
+    }
+}
+
+private func slugify(_ value: String, prefix: String) -> String {
+    let lower = value.lowercased()
+    let filtered = lower.map { character -> Character in
+        if character.isLetter || character.isNumber { return character }
+        return "-"
+    }
+    let text = String(filtered).replacingOccurrences(of: "-+", with: "-", options: .regularExpression)
+        .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+    return text.isEmpty ? "\(prefix)-item" : text
+}
+
 // MARK: - Theme
 
 private struct Theme {
@@ -276,7 +827,7 @@ private struct Theme {
 
 final class SkillsViewController: UIViewController {
 
-    private var skills: [(json: String, definition: SkillDefinition)] = []
+    private var skills: [SkillListEntry] = []
 
     private let headerStack: UIStackView = {
         let stack = UIStackView()
@@ -300,6 +851,24 @@ final class SkillsViewController: UIViewController {
         label.font = UIFont.systemFont(ofSize: 28, weight: .bold)
         label.textColor = Theme.text
         return label
+    }()
+
+    private lazy var importButton: UIButton = {
+        let button = UIButton(type: .system)
+        button.setTitle("Add Repo", for: .normal)
+        button.setTitleColor(Theme.accent, for: .normal)
+        button.titleLabel?.font = UIFont.monospacedSystemFont(ofSize: 12, weight: .semibold)
+        button.addTarget(self, action: #selector(promptImportPackage), for: .touchUpInside)
+        return button
+    }()
+
+    private lazy var syncButton: UIButton = {
+        let button = UIButton(type: .system)
+        button.setTitle("Sync Repos", for: .normal)
+        button.setTitleColor(Theme.textDim, for: .normal)
+        button.titleLabel?.font = UIFont.monospacedSystemFont(ofSize: 12, weight: .semibold)
+        button.addTarget(self, action: #selector(syncPackages), for: .touchUpInside)
+        return button
     }()
 
     private let countBadge: UILabel = {
@@ -364,6 +933,8 @@ final class SkillsViewController: UIViewController {
 
         titleRow.addArrangedSubview(titleLabel)
         titleRow.addArrangedSubview(countBadge)
+        titleRow.addArrangedSubview(importButton)
+        titleRow.addArrangedSubview(syncButton)
         titleRow.addArrangedSubview(UIView()) // spacer
         headerStack.addArrangedSubview(titleRow)
         headerStack.addArrangedSubview(subtitleLabel)
@@ -417,20 +988,32 @@ final class SkillsViewController: UIViewController {
 
     private func loadSkills() {
         skills = []
-        guard let skillURLs = Bundle.main.urls(forResourcesWithExtension: "json", subdirectory: "skills") else {
-            emptyLabel.text = "No skills found in bundle."
-            emptyLabel.isHidden = false
-            countBadge.text = "0"
-            tableView.reloadData()
-            return
+        if let skillURLs = Bundle.main.urls(forResourcesWithExtension: "json", subdirectory: "skills") {
+            let decoder = JSONDecoder()
+            for url in skillURLs.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+                guard let data = try? Data(contentsOf: url),
+                      let def = try? decoder.decode(SkillDefinition.self, from: data) else { continue }
+                let jsonName = url.deletingPathExtension().lastPathComponent
+                let entryURL = def.entryFile.flatMap {
+                    Bundle.main.url(forResource: ($0 as NSString).deletingPathExtension, withExtension: "js", subdirectory: "skills")
+                }
+                skills.append((
+                    json: jsonName,
+                    definition: def,
+                    source: SkillSource(
+                        type: "builtin",
+                        packageId: nil,
+                        packageName: nil,
+                        repoURL: nil,
+                        ref: nil,
+                        manifestURL: url,
+                        entryURL: entryURL
+                    )
+                ))
+            }
         }
-        let decoder = JSONDecoder()
-        for url in skillURLs.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
-            guard let data = try? Data(contentsOf: url),
-                  let def = try? decoder.decode(SkillDefinition.self, from: data) else { continue }
-            let jsonName = url.deletingPathExtension().lastPathComponent
-            skills.append((json: jsonName, definition: def))
-        }
+        skills.append(contentsOf: SkillsPackageStore.shared.loadInstalledSkills())
+        skills.sort { $0.definition.name.localizedCaseInsensitiveCompare($1.definition.name) == .orderedAscending }
         emptyLabel.text = skills.isEmpty ? "No skills available." : nil
         emptyLabel.isHidden = !skills.isEmpty
         countBadge.text = "\(skills.count)"
@@ -443,16 +1026,13 @@ final class SkillsViewController: UIViewController {
         tableView.reloadData()
     }
 
-    private func runSkill(_ skill: (json: String, definition: SkillDefinition), inputs: [String: Any]) {
-        guard let entryFile = skill.definition.entryFile else {
+    private func runSkill(_ skill: SkillListEntry, inputs: [String: Any]) {
+        guard let entryURL = skill.source.entryURL else {
             presentAlert(title: "No Entry File", message: "This skill has no entryFile defined.")
             return
         }
-        guard let jsURL = Bundle.main.url(forResource: entryFile.replacingOccurrences(of: ".js", with: ""),
-                                           withExtension: "js",
-                                           subdirectory: "skills"),
-              let jsCode = try? String(contentsOf: jsURL, encoding: .utf8) else {
-            presentAlert(title: "Missing JS", message: "Could not load \(entryFile) from bundle.")
+        guard let jsCode = try? String(contentsOf: entryURL, encoding: .utf8) else {
+            presentAlert(title: "Missing JS", message: "Could not load skill code for \(skill.definition.name).")
             return
         }
 
@@ -463,7 +1043,11 @@ final class SkillsViewController: UIViewController {
         } else {
             inputJSON = "{}"
         }
-        let wrappedCode = "var skillInput = \(inputJSON);\n\(jsCode)"
+        let wrappedCode = SkillsPackageStore.shared.preprocessSkillCode("""
+        var skillInput = \(inputJSON);
+        var SkillInput = skillInput;
+        \(jsCode)
+        """)
 
         let resultVC = SkillResultViewController(skillName: skill.definition.name, code: wrappedCode)
         let nav = UINavigationController(rootViewController: resultVC)
@@ -472,7 +1056,7 @@ final class SkillsViewController: UIViewController {
         present(nav, animated: true)
     }
 
-    private func presentInputForm(for skill: (json: String, definition: SkillDefinition)) {
+    private func presentInputForm(for skill: SkillListEntry) {
         let inputs = skill.definition.inputs
         if inputs.isEmpty {
             runSkill(skill, inputs: [:])
@@ -501,6 +1085,47 @@ final class SkillsViewController: UIViewController {
         let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "OK", style: .default))
         present(alert, animated: true)
+    }
+
+    @objc private func promptImportPackage() {
+        let alert = UIAlertController(title: "Add Repo", message: "Add a public GitHub repo that contains a DarkForge package.", preferredStyle: .alert)
+        alert.addTextField { field in
+            field.placeholder = "https://github.com/owner/repo/tree/main/path"
+            field.autocapitalizationType = .none
+            field.autocorrectionType = .no
+            field.keyboardType = .URL
+        }
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Add Repo", style: .default, handler: { [weak self, weak alert] _ in
+            guard let self, let source = alert?.textFields?.first?.text?.trimmingCharacters(in: .whitespacesAndNewlines), !source.isEmpty else { return }
+            self.importButton.isEnabled = false
+            SkillsPackageStore.shared.importPackage(from: source) { result in
+                self.importButton.isEnabled = true
+                switch result {
+                case .success(let info):
+                    self.loadSkills()
+                    self.presentAlert(title: "Repo Added", message: "\(info.package.name) was added from \(info.source.repoUrl).")
+                case .failure(let error):
+                    self.presentAlert(title: "Add Repo Failed", message: error.localizedDescription)
+                }
+            }
+        }))
+        present(alert, animated: true)
+    }
+
+    @objc private func syncPackages() {
+        syncButton.isEnabled = false
+        SkillsPackageStore.shared.syncInstalledPackages { [weak self] result in
+            guard let self else { return }
+            self.syncButton.isEnabled = true
+            switch result {
+            case .success(let count):
+                self.loadSkills()
+                self.presentAlert(title: "Repos Synced", message: count == 0 ? "No linked repos were installed." : "Updated \(count) linked repo(s).")
+            case .failure(let error):
+                self.presentAlert(title: "Sync Repos Failed", message: error.localizedDescription)
+            }
+        }
     }
 }
 
@@ -535,6 +1160,27 @@ extension SkillsViewController: UITableViewDataSource, UITableViewDelegate {
 
     func tableView(_ tableView: UITableView, estimatedHeightForRowAt indexPath: IndexPath) -> CGFloat {
         88
+    }
+
+    func tableView(_ tableView: UITableView, trailingSwipeActionsConfigurationForRowAt indexPath: IndexPath) -> UISwipeActionsConfiguration? {
+        let skill = skills[indexPath.row]
+        guard skill.source.type == "linked", let packageId = skill.source.packageId else { return nil }
+        let deleteAction = UIContextualAction(style: .destructive, title: "Remove Repo") { [weak self] _, _, completion in
+            guard let self else {
+                completion(false)
+                return
+            }
+            do {
+                try SkillsPackageStore.shared.uninstallPackage(packageId: packageId)
+                self.loadSkills()
+                completion(true)
+            } catch {
+                self.presentAlert(title: "Remove Repo Failed", message: error.localizedDescription)
+                completion(false)
+            }
+        }
+        deleteAction.backgroundColor = Theme.danger
+        return UISwipeActionsConfiguration(actions: [deleteAction])
     }
 }
 

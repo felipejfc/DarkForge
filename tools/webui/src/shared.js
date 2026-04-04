@@ -4,7 +4,10 @@ export const state = {
   launchdAgentConnected: false,
   launchdWorkerReady: false,
   skills: [],
+  packages: [],
+  libraries: [],
   selectedSkillId: null,
+  selectedSkillSourceType: null,
   busy: false,
   fileBusy: false,
   activeView: "skills",
@@ -27,6 +30,7 @@ export const state = {
   skillInputs: [],
   skillInputValues: {},
   skillEntryFile: "",
+  skillLibraryDependencies: [],
   activeJobId: null,
   jobs: {},
   eventSource: null,
@@ -48,6 +52,8 @@ export const els = {
   serverLogOutput: document.querySelector("#serverLogOutput"),
   skillGrid: document.querySelector("#skillGrid"),
   skillSearch: document.querySelector("#skillSearch"),
+  importPackageButton: document.querySelector("#importPackageButton"),
+  managePackagesButton: document.querySelector("#managePackagesButton"),
   newSkillButton: document.querySelector("#newSkillButton"),
   statusSkillCount: document.querySelector("#statusSkillCount"),
   backToSkills: document.querySelector("#backToSkills"),
@@ -125,7 +131,14 @@ export const els = {
   skillRuntime: document.querySelector("#skillRuntime"),
   skillExecutionMode: document.querySelector("#skillExecutionMode"),
   skillInputsSchema: document.querySelector("#skillInputsSchema"),
+  skillLibraryDependencies: document.querySelector("#skillLibraryDependencies"),
   skillSchemaStatus: document.querySelector("#skillSchemaStatus"),
+  packageModal: document.querySelector("#packageModal"),
+  packageSourceInput: document.querySelector("#packageSourceInput"),
+  previewPackageButton: document.querySelector("#previewPackageButton"),
+  installPackageButton: document.querySelector("#installPackageButton"),
+  packageList: document.querySelector("#packageList"),
+  libraryList: document.querySelector("#libraryList"),
   toastContainer: document.querySelector("#toastContainer"),
 };
 
@@ -243,9 +256,11 @@ export function setBusy(nextBusy) {
   els.runButton.classList.toggle("is-running", nextBusy);
   els.saveSkillButton.disabled = nextBusy;
   if (els.exitSkillModeButton) els.exitSkillModeButton.disabled = nextBusy || !state.selectedSkillId;
-  els.deleteSkillButton.disabled = nextBusy || !state.selectedSkillId;
+  els.deleteSkillButton.disabled = nextBusy || !state.selectedSkillId || state.selectedSkillSourceType !== "local";
   els.runModalExecute.disabled = nextBusy;
   els.runModalExecute.classList.toggle("is-running", nextBusy);
+  if (els.previewPackageButton) els.previewPackageButton.disabled = nextBusy;
+  if (els.installPackageButton) els.installPackageButton.disabled = nextBusy;
 }
 
 export function setRunMeta(label, variant = "") {

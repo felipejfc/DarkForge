@@ -1,0 +1,238 @@
+name: Build Release Assets
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Existing Git tag to build and publish"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  build_desktop:
+    name: Build macOS desktop bundle
+    runs-on: macos-15
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
+
+      - name: Ensure Rust toolchain is available
+        shell: bash
+        run: |
+          if ! command -v cargo >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          fi
+
+          source "$HOME/.cargo/env" 2>/dev/null || true
+          rustc --version
+          cargo --version
+          python3 --version
+
+      - name: Install Tauri CLI
+        shell: bash
+        run: |
+          source "$HOME/.cargo/env" 2>/dev/null || true
+          cargo install tauri-cli --version '^2.0.0' --locked
+
+      - name: Build desktop bundle
+        shell: bash
+        run: |
+          source "$HOME/.cargo/env" 2>/dev/null || true
+          ./tools/desktop/build.sh
+
+      - name: Collect desktop release assets
+        shell: bash
+        run: |
+          DMG_PATH="$(find tools/desktop/src-tauri/target/release/bundle/dmg -maxdepth 1 -name '*.dmg' -print -quit)"
+          if [ -z "$DMG_PATH" ]; then
+            echo "No desktop DMG was produced." >&2
+            exit 1
+          fi
+
+          mkdir -p release-assets/desktop
+          cp "$DMG_PATH" "release-assets/desktop/DarkForge-${RELEASE_TAG}-macos-arm64.dmg"
+          ls -lah release-assets/desktop
+
+      - name: Upload desktop workflow artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: desktop-release-assets
+          path: release-assets/desktop/*
+          if-no-files-found: error
+          retention-days: 14
+
+  build_ios:
+    name: Build iOS IPA (unsigned for Sideloadly)
+    runs-on: macos-15
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
+
+      - name: Build unsigned iOS app
+        shell: bash
+        run: |
+          DERIVED_DATA_PATH="$RUNNER_TEMP/DarkForge-derived-data"
+          APP_PATH="$DERIVED_DATA_PATH/Build/Products/Release-iphoneos/DarkForge.app"
+
+          xcodebuild \
+            -project DarkForge.xcodeproj \
+            -scheme DarkForge \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$DERIVED_DATA_PATH" \
+            CODE_SIGNING_ALLOWED=NO \
+            clean build
+
+          if [ ! -d "$APP_PATH" ]; then
+            echo "Expected app bundle not found at $APP_PATH" >&2
+            exit 1
+          fi
+
+          echo "IOS_APP_PATH=$APP_PATH" >> "$GITHUB_ENV"
+
+      - name: Package unsigned IPA
+        shell: bash
+        run: |
+          STAGING_DIR="$RUNNER_TEMP/ipa-staging"
+          mkdir -p "$STAGING_DIR/Payload"
+          cp -R "$IOS_APP_PATH" "$STAGING_DIR/Payload/DarkForge.app"
+
+          mkdir -p release-assets/ios
+          rm -f "release-assets/ios/DarkForge-${RELEASE_TAG}-unsigned.ipa"
+          (
+            cd "$STAGING_DIR"
+            ditto -c -k --sequesterRsrc --keepParent Payload \
+              "$GITHUB_WORKSPACE/release-assets/ios/DarkForge-${RELEASE_TAG}-unsigned.ipa"
+          )
+
+          unzip -l "release-assets/ios/DarkForge-${RELEASE_TAG}-unsigned.ipa" | sed -n '1,40p'
+          ls -lah release-assets/ios
+
+      - name: Upload iOS workflow artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: ios-release-assets
+          path: release-assets/ios/*
+          if-no-files-found: error
+          retention-days: 14
+
+  publish_release:
+    name: Publish GitHub release assets
+    needs:
+      - build_desktop
+      - build_ios
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+    steps:
+      - name: Download workflow artifacts
+        uses: actions/download-artifact@v5
+        with:
+          path: release-assets
+
+      - name: Show collected assets
+        shell: bash
+        run: |
+          find release-assets -type f -print | sort
+
+      - name: Create or update GitHub release
+        uses: actions/github-script@v8
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+
+            function walk(dir) {
+              return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+                const fullPath = path.join(dir, entry.name);
+                return entry.isDirectory() ? walk(fullPath) : [fullPath];
+              });
+            }
+
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const tag = process.env.RELEASE_TAG;
+            const assetRoot = path.join(process.env.GITHUB_WORKSPACE, 'release-assets');
+            const files = fs.existsSync(assetRoot) ? walk(assetRoot) : [];
+
+            if (!files.length) {
+              core.setFailed(`No release assets found under ${assetRoot}`);
+              return;
+            }
+
+            let release;
+            try {
+              const existing = await github.rest.repos.getReleaseByTag({
+                owner,
+                repo,
+                tag,
+              });
+              release = existing.data;
+            } catch (error) {
+              if (error.status !== 404) {
+                throw error;
+              }
+
+              const created = await github.rest.repos.createRelease({
+                owner,
+                repo,
+                tag_name: tag,
+                name: tag,
+                generate_release_notes: true,
+              });
+              release = created.data;
+            }
+
+            const existingAssets = await github.paginate(github.rest.repos.listReleaseAssets, {
+              owner,
+              repo,
+              release_id: release.id,
+              per_page: 100,
+            });
+
+            for (const file of files) {
+              const assetName = path.basename(file);
+              const prior = existingAssets.find((asset) => asset.name === assetName);
+              if (prior) {
+                await github.rest.repos.deleteReleaseAsset({
+                  owner,
+                  repo,
+                  asset_id: prior.id,
+                });
+              }
+
+              const data = fs.readFileSync(file);
+              await github.rest.repos.uploadReleaseAsset({
+                owner,
+                repo,
+                release_id: release.id,
+                name: assetName,
+                data,
+                headers: {
+                  'content-type': 'application/octet-stream',
+                  'content-length': data.length,
+                },
+              });
+            }

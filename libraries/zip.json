@@ -1,0 +1,39 @@
+{
+  "id": "zip",
+  "name": "ZIP Utilities",
+  "summary": "Shared ZIP packaging helpers for staged payloads and user scripts.",
+  "entryFile": "zip.js",
+  "version": "1.0.0",
+  "exposureMode": "hybrid",
+  "namespace": "zip",
+  "moduleId": "darkforge/zip",
+  "dependencies": [],
+  "exports": [
+    "createZip",
+    "crc32"
+  ],
+  "enabledByDefault": true,
+  "apiReference": [
+    {
+      "name": "Libraries.zip.createZip",
+      "signature": "Libraries.zip.createZip(zipPath, rootDir, prefix)",
+      "category": "Libraries",
+      "description": "Create a store-only ZIP archive from a directory tree in the remote runtime.",
+      "snippet": "Libraries.zip.createZip(\"/var/mobile/Downloads/out.zip\", \"/var/mobile/Downloads\", \"Payload\");"
+    },
+    {
+      "name": "Libraries.zip.crc32",
+      "signature": "Libraries.zip.crc32(buffer)",
+      "category": "Libraries",
+      "description": "Compute a CRC-32 checksum for an ArrayBuffer or typed-array buffer.",
+      "snippet": "const crc = Libraries.zip.crc32(FileUtils.readFile(\"/tmp/input.bin\"));\nlog(String(crc));"
+    },
+    {
+      "name": "require(\"darkforge/zip\")",
+      "signature": "const zip = require(\"darkforge/zip\")",
+      "category": "Libraries",
+      "description": "Load the ZIP helpers as a module instead of using the global namespace.",
+      "snippet": "const zip = require(\"darkforge/zip\");\nzip.createZip(\"/var/mobile/Downloads/out.zip\", \"/var/mobile/Downloads\", \"Payload\");"
+    }
+  ]
+}

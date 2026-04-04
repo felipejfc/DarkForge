@@ -1,4 +1,4 @@
-import { API_CATALOG, API_CATEGORIES, DEFAULT_SCRIPT } from "./src/catalog.js";
+import { API_CATALOG, API_CATEGORIES, DEFAULT_SCRIPT, updateApiCatalog } from "./src/catalog.js";
 import {
   closeModal,
   connectEventStream,
@@ -25,7 +25,7 @@ import {
 } from "./src/shared.js";
 import { handleConnectionLoss, installFileManagerBehaviors, loadDirectory } from "./src/files.js";
 
-const TOKEN_REGEX = /\/\/.*|\/\*[\s\S]*?\*\/|`(?:\\[\s\S]|[^`])*`|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\b(?:0x[\da-fA-F]+n?|\d+(?:\.\d+)?n?)\b|\b(?:const|let|var|if|else|return|function|class|for|while|try|catch|throw|new|await|async|switch|case|break|continue|typeof|instanceof|in|of)\b|\b(?:true|false|null|undefined|Native|FileUtils|RootFS|Apps|Tasks|TaskMemory|MachO|Staging|skillInput|SkillInput|log|BigInt)\b/g;
+const TOKEN_REGEX = /\/\/.*|\/\*[\s\S]*?\*\/|`(?:\\[\s\S]|[^`])*`|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\b(?:0x[\da-fA-F]+n?|\d+(?:\.\d+)?n?)\b|\b(?:const|let|var|if|else|return|function|class|for|while|try|catch|throw|new|await|async|switch|case|break|continue|typeof|instanceof|in|of)\b|\b(?:true|false|null|undefined|Native|FileUtils|RootFS|Apps|Tasks|TaskMemory|MachO|Staging|Libraries|skillInput|SkillInput|log|require|BigInt)\b/g;
 
 function classifyToken(token) {
   if (token.startsWith("//") || token.startsWith("/*")) return "tok-comment";
@@ -141,6 +141,19 @@ function parseSkillInputSchema() {
     seen.add(def.id);
   }
   return normalized;
+}
+
+function parseLibraryDependencies() {
+  const raw = els.skillLibraryDependencies.value.trim();
+  if (!raw) return [];
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("Library dependencies must be valid JSON.");
+  }
+  if (!Array.isArray(parsed)) throw new Error("Library dependencies must be a JSON array.");
+  return parsed.map((value) => String(value || "").trim()).filter(Boolean);
 }
 
 function setSchemaStatus(message, variant = "") {
@@ -428,6 +441,12 @@ function renderSkillGrid() {
     runtimeTag.className = "tag";
     runtimeTag.textContent = skill.runtime === "jscbridge" ? "JSCBridge" : skill.runtime;
     tags.append(runtimeTag);
+    if (skill.sourceType) {
+      const sourceTag = document.createElement("span");
+      sourceTag.className = "tag tag-muted";
+      sourceTag.textContent = skill.sourceType === "linked" ? `Linked${skill.packageName ? ` · ${skill.packageName}` : ""}` : (skill.sourceType === "local" ? "Local" : "Built-in");
+      tags.append(sourceTag);
+    }
     if (skill.executionMode === "job") {
       const modeTag = document.createElement("span");
       modeTag.className = "tag tag-warm";
@@ -439,6 +458,12 @@ function renderSkillGrid() {
       inputTag.className = "tag tag-muted";
       inputTag.textContent = `${skill.inputCount} input${skill.inputCount === 1 ? "" : "s"}`;
       tags.append(inputTag);
+    }
+    if (Array.isArray(skill.libraryDependencies) && skill.libraryDependencies.length > 0) {
+      const depsTag = document.createElement("span");
+      depsTag.className = "tag tag-muted";
+      depsTag.textContent = `${skill.libraryDependencies.length} libr${skill.libraryDependencies.length === 1 ? "ary" : "aries"}`;
+      tags.append(depsTag);
     }
 
     const footer = document.createElement("div");
@@ -463,11 +488,12 @@ function syncSkillModeControls() {
   const attached = Boolean(state.selectedSkillId);
   els.exitSkillModeButton.hidden = !attached;
   els.exitSkillModeButton.disabled = state.busy || !attached;
-  els.deleteSkillButton.disabled = state.busy || !attached;
+  els.deleteSkillButton.disabled = state.busy || !attached || state.selectedSkillSourceType !== "local";
 }
 
-function setSelectedSkill(skillId) {
+function setSelectedSkill(skillId, sourceType = null) {
   state.selectedSkillId = skillId || null;
+  state.selectedSkillSourceType = sourceType || null;
   syncSkillModeControls();
 }
 
@@ -477,10 +503,12 @@ function populateEditor(skill) {
   els.skillRuntime.value = skill?.runtime || "jscbridge";
   els.skillExecutionMode.value = skill?.executionMode || "interactive";
   els.skillInputsSchema.value = JSON.stringify(skill?.inputs || [], null, 2);
+  els.skillLibraryDependencies.value = JSON.stringify(skill?.libraryDependencies || [], null, 2);
   els.editorInput.value = skill?.code || DEFAULT_SCRIPT;
   state.skillRuntime = els.skillRuntime.value;
   state.skillExecutionMode = els.skillExecutionMode.value;
   state.skillEntryFile = skill?.entryFile || "";
+  state.skillLibraryDependencies = Array.isArray(skill?.libraryDependencies) ? [...skill.libraryDependencies] : [];
   state.skillInputValues = {};
   refreshSchemaFromEditor();
   state.lastSavedCode = els.editorInput.value;
@@ -493,8 +521,10 @@ function exitSkillMode() {
   if (!state.selectedSkillId) return;
   setSelectedSkill(null);
   state.skillEntryFile = "";
+  state.skillLibraryDependencies = [];
   state.skillInputValues = {};
   els.skillInputsSchema.value = "";
+  els.skillLibraryDependencies.value = "";
   refreshSchemaFromEditor();
   state.lastSavedCode = "";
   updateDirtyState();
@@ -504,7 +534,7 @@ function exitSkillMode() {
 async function openSkillInEditor(skillId) {
   try {
     const skill = await requestJson(`/api/skills/${encodeURIComponent(skillId)}`, { headers: {} });
-    setSelectedSkill(skill.id);
+    setSelectedSkill(skill.id, skill.sourceType);
     populateEditor(skill);
     setView("editor");
   } catch (error) {
@@ -515,7 +545,7 @@ async function openSkillInEditor(skillId) {
 async function quickRunSkill(skillId) {
   try {
     const skill = await requestJson(`/api/skills/${encodeURIComponent(skillId)}`, { headers: {} });
-    setSelectedSkill(skill.id);
+    setSelectedSkill(skill.id, skill.sourceType);
     populateEditor(skill);
     setView("editor");
     initiateRun();
@@ -532,20 +562,24 @@ function resetDraft() {
     runtime: "jscbridge",
     executionMode: "interactive",
     inputs: [],
+    libraryDependencies: [],
     code: DEFAULT_SCRIPT,
   });
 }
 
 function initiateRun() {
   let inputs;
+  let libraryDependencies;
   try {
     inputs = parseSkillInputSchema();
+    libraryDependencies = parseLibraryDependencies();
   } catch (error) {
     setSchemaStatus(error.message, "error");
     showToast(error.message, "error");
     return;
   }
   state.skillInputs = inputs;
+  state.skillLibraryDependencies = libraryDependencies;
 
   if (inputs.length > 0) {
     showRunModal();
@@ -586,6 +620,7 @@ async function executeRun() {
         inputs: state.skillInputs,
         inputValues: state.skillInputValues,
         entryFile: state.skillEntryFile || undefined,
+        libraryDependencies: state.skillLibraryDependencies,
         target: target !== "auto" ? target : undefined,
       }),
     });
@@ -636,8 +671,10 @@ async function saveSkill() {
   }
 
   let inputs;
+  let libraryDependencies;
   try {
     inputs = parseSkillInputSchema();
+    libraryDependencies = parseLibraryDependencies();
   } catch (error) {
     setSchemaStatus(error.message, "error");
     showToast(error.message, "error");
@@ -649,8 +686,8 @@ async function saveSkill() {
     const saved = await requestJson("/api/skills", {
       method: "POST",
       body: JSON.stringify({
-        id: state.selectedSkillId,
-        previousId: state.selectedSkillId,
+        id: state.selectedSkillSourceType === "local" ? state.selectedSkillId : undefined,
+        previousId: state.selectedSkillSourceType === "local" ? state.selectedSkillId : undefined,
         name,
         summary: els.skillSummary.value.trim(),
         code,
@@ -658,13 +695,15 @@ async function saveSkill() {
         executionMode: els.skillExecutionMode.value,
         inputs,
         entryFile: state.skillEntryFile || undefined,
+        libraryDependencies,
       }),
     });
-    setSelectedSkill(saved.id);
+    setSelectedSkill(saved.id, saved.sourceType);
     state.lastSavedCode = code;
     state.dirty = false;
     els.dirtyIndicator.hidden = true;
     els.skillName.value = saved.name;
+    state.skillLibraryDependencies = libraryDependencies;
     showToast(`Saved "${saved.name}"`, "success");
     await refreshSkills();
   } catch (error) {
@@ -735,6 +774,166 @@ async function refreshSkills() {
   const data = await requestJson("/api/skills", { headers: {} });
   state.skills = data.skills || [];
   renderSkillGrid();
+}
+
+function renderPackageManager() {
+  els.packageList.innerHTML = "";
+  els.libraryList.innerHTML = "";
+
+  if (!state.packages.length) {
+    const empty = document.createElement("div");
+    empty.className = "package-item-empty";
+    empty.textContent = "No linked repos installed.";
+    els.packageList.append(empty);
+  }
+
+  for (const pkg of state.packages) {
+    const card = document.createElement("div");
+    card.className = "package-item";
+
+    const title = document.createElement("div");
+    title.className = "package-item-title";
+    title.textContent = pkg.name;
+
+    const meta = document.createElement("div");
+    meta.className = "package-item-meta";
+    meta.textContent = `${pkg.repoUrl} @ ${pkg.sourceRef}${pkg.resolvedCommit ? ` (${pkg.resolvedCommit.slice(0, 12)})` : ""}`;
+
+    const summary = document.createElement("p");
+    summary.className = "package-item-summary";
+    summary.textContent = pkg.summary || `${pkg.skillCount} skills · ${pkg.libraryCount} libraries`;
+
+    const actions = document.createElement("div");
+    actions.className = "package-item-actions";
+    const checkBtn = document.createElement("button");
+    checkBtn.type = "button";
+    checkBtn.className = "btn btn-ghost btn-sm";
+    checkBtn.textContent = "Check";
+    checkBtn.addEventListener("click", () => checkPackageUpdate(pkg.id));
+    const updateBtn = document.createElement("button");
+    updateBtn.type = "button";
+    updateBtn.className = "btn btn-secondary btn-sm";
+    updateBtn.textContent = "Update";
+    updateBtn.addEventListener("click", () => updatePackage(pkg.id));
+    const deleteBtn = document.createElement("button");
+    deleteBtn.type = "button";
+    deleteBtn.className = "btn btn-ghost btn-sm btn-danger";
+    deleteBtn.textContent = "Remove";
+    deleteBtn.addEventListener("click", () => deletePackage(pkg.id));
+    actions.append(checkBtn, updateBtn, deleteBtn);
+
+    card.append(title, meta, summary, actions);
+    els.packageList.append(card);
+  }
+
+  if (!state.libraries.length) {
+    const empty = document.createElement("div");
+    empty.className = "package-item-empty";
+    empty.textContent = "No libraries available.";
+    els.libraryList.append(empty);
+  }
+
+  for (const library of state.libraries) {
+    const row = document.createElement("label");
+    row.className = "package-item library-item";
+
+    const top = document.createElement("div");
+    top.className = "library-item-top";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = Boolean(library.enabled);
+    checkbox.disabled = library.sourceType !== "linked";
+    checkbox.addEventListener("change", () => toggleLibrary(library.moduleId, checkbox.checked));
+    const title = document.createElement("strong");
+    title.textContent = `${library.name} (${library.moduleId})`;
+    top.append(checkbox, title);
+
+    const meta = document.createElement("div");
+    meta.className = "package-item-meta";
+    meta.textContent = `${library.exposureMode}${library.namespace ? ` · Libraries.${library.namespace}` : ""}${library.packageName ? ` · ${library.packageName}` : ""}`;
+
+    const summary = document.createElement("p");
+    summary.className = "package-item-summary";
+    summary.textContent = library.summary || "No description";
+
+    row.append(top, meta, summary);
+    els.libraryList.append(row);
+  }
+}
+
+async function refreshPackagesAndLibraries() {
+  const [packages, libraries, runtimeCatalog] = await Promise.all([
+    requestJson("/api/packages", { headers: {} }),
+    requestJson("/api/libraries", { headers: {} }),
+    requestJson("/api/runtime/catalog", { headers: {} }),
+  ]);
+  state.packages = packages.packages || [];
+  state.libraries = libraries.libraries || [];
+  updateApiCatalog(runtimeCatalog.apiCatalog || []);
+  renderApiRefList(els.apiRefSearch.value.trim());
+  renderPackageManager();
+}
+
+async function previewPackageSource() {
+  const source = els.packageSourceInput.value.trim();
+  if (!source) {
+    showToast("Enter a GitHub repo source first.", "error");
+    return null;
+  }
+  const preview = await requestJson("/api/package-import/preview", {
+    method: "POST",
+    body: JSON.stringify({ source }),
+  });
+  ensureConsoleOpen("result");
+  writeResult(JSON.stringify(preview, null, 2));
+  showToast(`Previewed repo "${preview.package.name}"`, "info");
+  return preview;
+}
+
+async function installPackageSource() {
+  const preview = await previewPackageSource();
+  if (!preview) return;
+  const ok = window.confirm(`Add repo "${preview.package.name}" from ${preview.source.repoUrl} @ ${preview.source.resolvedCommit.slice(0, 12)}?`);
+  if (!ok) return;
+  const result = await requestJson("/api/package-import/install", {
+    method: "POST",
+    body: JSON.stringify({ source: els.packageSourceInput.value.trim() }),
+  });
+  showToast(`Added repo "${result.package.name}"`, "success");
+  await Promise.all([refreshSkills(), refreshPackagesAndLibraries()]);
+}
+
+async function checkPackageUpdate(packageId) {
+  const result = await requestJson(`/api/packages/${encodeURIComponent(packageId)}/check-update`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+  showToast(result.hasUpdate ? `Update available for ${packageId}` : `${packageId} is current`, result.hasUpdate ? "info" : "success");
+}
+
+async function updatePackage(packageId) {
+  await requestJson(`/api/packages/${encodeURIComponent(packageId)}/update`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+  showToast(`Updated "${packageId}"`, "success");
+  await Promise.all([refreshSkills(), refreshPackagesAndLibraries()]);
+}
+
+async function deletePackage(packageId) {
+  if (!window.confirm(`Remove repo "${packageId}"?`)) return;
+  await requestJson(`/api/packages/${encodeURIComponent(packageId)}`, { method: "DELETE" });
+  showToast(`Removed repo "${packageId}"`, "info");
+  await Promise.all([refreshSkills(), refreshPackagesAndLibraries()]);
+}
+
+async function toggleLibrary(moduleId, enabled) {
+  await requestJson(`/api/libraries/${encodeURIComponent(moduleId)}/toggle`, {
+    method: "POST",
+    body: JSON.stringify({ enabled }),
+  });
+  showToast(`${enabled ? "Enabled" : "Disabled"} ${moduleId}`, "info");
+  await refreshPackagesAndLibraries();
 }
 
 function normalizeEditorText() {
@@ -1070,6 +1269,22 @@ async function init() {
     resetDraft();
     activateView("editor");
   });
+  els.importPackageButton.addEventListener("click", () => openModal(els.packageModal));
+  els.managePackagesButton.addEventListener("click", () => openModal(els.packageModal));
+  els.previewPackageButton.addEventListener("click", async () => {
+    try {
+      await previewPackageSource();
+    } catch (error) {
+      showToast(error.message, "error");
+    }
+  });
+  els.installPackageButton.addEventListener("click", async () => {
+    try {
+      await installPackageSource();
+    } catch (error) {
+      showToast(error.message, "error");
+    }
+  });
   els.skillSearch.addEventListener("input", renderSkillGrid);
 
   els.skillSettingsButton.addEventListener("click", () => openModal(els.settingsModal));
@@ -1092,6 +1307,7 @@ async function init() {
   await Promise.all([
     refreshStatus(handleConnectionLoss),
     refreshSkills(),
+    refreshPackagesAndLibraries(),
     refreshServerLogs(),
   ]);
   window.setInterval(async () => {

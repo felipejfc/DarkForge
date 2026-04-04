@@ -107,6 +107,7 @@ Supported fields:
 | `executionMode` | no | `interactive` or `job` |
 | `entryFile` | recommended | Must point to a `.js` file inside `skills/` |
 | `inputs` | no | Array of structured input definitions |
+| `libraryDependencies` | no | Array of module IDs or unique aliases for shared libraries |
 
 Notes:
 
@@ -382,6 +383,9 @@ Good reference skills in this repository:
 - `skills/list-installed-apps.js`
 - `skills/decrypt-ipa.json`
 - `skills/decrypt-ipa.js`
+
+For repo-linked package and library sharing, see
+[`REPO.md`](./REPO.md).
 
 Those examples show:
 

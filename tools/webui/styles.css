@@ -1066,6 +1066,75 @@ button { border: 0; cursor: pointer; }
 
 .field-help.is-error { color: var(--danger); }
 
+.modal-inline-actions {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+.package-section {
+  margin-top: 18px;
+}
+
+.package-section h3 {
+  margin: 0 0 10px;
+  font-size: 0.92rem;
+  font-family: var(--editor-font);
+  color: var(--text-dim);
+}
+
+.package-list {
+  display: grid;
+  gap: 10px;
+}
+
+.package-item,
+.package-item-empty {
+  border: 1px solid rgba(126, 154, 184, 0.12);
+  border-radius: var(--radius-md);
+  background: rgba(7, 12, 20, 0.55);
+  padding: 12px 14px;
+}
+
+.package-item-title {
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+
+.package-item-meta {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-family: var(--editor-font);
+  margin-bottom: 8px;
+  word-break: break-all;
+}
+
+.package-item-summary {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.package-item-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.library-item {
+  display: grid;
+  gap: 6px;
+}
+
+.library-item-top {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
 /* Run modal input styles */
 .run-input-row {
   display: grid;

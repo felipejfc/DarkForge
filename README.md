@@ -193,7 +193,8 @@ They can be:
 - managed through the host API
 - run interactively or queued as jobs
 
-To add a new one, see [`docs/creating-skills.md`](./docs/creating-skills.md).
+To create a shared repo, see [`docs/REPO.md`](./docs/REPO.md).
+To add a new skill, see [`docs/creating-skills.md`](./docs/creating-skills.md).
 
 ## Important Documents
 
@@ -203,6 +204,7 @@ To add a new one, see [`docs/creating-skills.md`](./docs/creating-skills.md).
 - [`USING-REPL.md`](./using-repl.md): REPL usage and HTTP API examples
 - [`docs/jsc-bridge-development-guide.md`](./docs/jsc-bridge-development-guide.md):
   bridge-specific pitfalls and invariants
+- [`docs/REPO.md`](./docs/REPO.md): repo structure for shared skills and libraries
 - [`docs/creating-skills.md`](./docs/creating-skills.md): skill authoring guide
 
 ## Design Goals

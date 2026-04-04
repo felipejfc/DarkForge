@@ -15,7 +15,6 @@
 		08E79DD74FFF919A756FE790 /* IOSurface.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3D9F8657DF7D9030246D4783 /* IOSurface.framework */; };
 		09F7B0FED2F6640D3AA8021C /* SkillsViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1AA0A2D4E44713D6A688A2D7 /* SkillsViewController.swift */; };
 		1BA4F7861434FFE56EA58DA1 /* ExploitUtils.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5805856C598658696AF3EAF7 /* ExploitUtils.swift */; };
-		26B4937CFA9696B4EA66D42D /* MIGFB.swift in Sources */ = {isa = PBXBuildFile; fileRef = A27794F2A84B38401CEFA1A9 /* MIGFB.swift */; };
 		2F4A1BB8A8E394ED8503B4AA /* JSContextRegistration.swift in Sources */ = {isa = PBXBuildFile; fileRef = C26D93D7933A019AA94A3FCD /* JSContextRegistration.swift */; };
 		30FBEF6FE29BCCD202C48727 /* RaceCondition.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B9756DE42A4ABFF2EB87D6D /* RaceCondition.swift */; };
 		4C0B6A3A0BF0C3799B5D1B06 /* DeviceProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 569A662FAE9487811C9C0C76 /* DeviceProfile.swift */; };
@@ -77,7 +76,6 @@
 		9B6A4D84E5A84BE6A51AB858 /* skills */ = {isa = PBXFileReference; lastKnownFileType = folder; path = skills; sourceTree = "<group>"; };
 		9CC332E64E6C91C1CDF878FF /* JSCBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSCBridge.swift; sourceTree = "<group>"; };
 		A10265119F06961EF011BFB6 /* PACUtils.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PACUtils.swift; sourceTree = "<group>"; };
-		A27794F2A84B38401CEFA1A9 /* MIGFB.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIGFB.swift; sourceTree = "<group>"; };
 		A9A063E2D30243B8E9913F19 /* PhysTranslation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhysTranslation.swift; sourceTree = "<group>"; };
 		B65215AAA6FC7630F8C702F8 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		BE589C63B307843932C7E944 /* KernelRW.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KernelRW.swift; sourceTree = "<group>"; };
@@ -183,7 +181,6 @@
 				BE589C63B307843932C7E944 /* KernelRW.swift */,
 				5832E05D560D3644AF20CC13 /* KExploit.swift */,
 				2343222A184BFD61C348445A /* LaunchdInjection.swift */,
-				A27794F2A84B38401CEFA1A9 /* MIGFB.swift */,
 				2FB661735B5D8CA11D89DCB3 /* Offsets.swift */,
 				A10265119F06961EF011BFB6 /* PACUtils.swift */,
 				385779BFF53170F8E962BC91 /* PCBCorruption.swift */,
@@ -293,7 +290,6 @@
 				BE17F10FAC7CBF03136D2235 /* KernelREPL.swift in Sources */,
 				891443F2086F2E55608ADB73 /* KernelRW.swift in Sources */,
 				51A5A0F63318492A959E49AD /* LaunchdInjection.swift in Sources */,
-				26B4937CFA9696B4EA66D42D /* MIGFB.swift in Sources */,
 				F102EE62158F38DFFCA0F408 /* Offsets.swift in Sources */,
 				A051C5E2B333609021DCD25C /* PACUtils.swift in Sources */,
 				A89C3B3E2F6F311C258C97F3 /* PCBCorruption.swift in Sources */,

@@ -75,6 +75,18 @@ class WebUiAssetTests(unittest.TestCase):
         self.assertIn("function exitSkillMode()", app_js)
         self.assertIn('els.exitSkillModeButton.addEventListener("click", exitSkillMode);', app_js)
 
+    def test_package_controls_exist_in_index(self) -> None:
+        ids = self._index_element_ids()
+        self.assertIn("importPackageButton", ids)
+        self.assertIn("managePackagesButton", ids)
+        self.assertIn("packageModal", ids)
+
+    def test_app_fetches_runtime_catalog_and_package_endpoints(self) -> None:
+        app_js = (WEB_UI_DIR / "app.js").read_text(encoding="utf-8")
+        self.assertIn('/api/runtime/catalog', app_js)
+        self.assertIn('/api/package-import/install', app_js)
+        self.assertIn('/api/libraries/', app_js)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,4 +1,4 @@
-export const API_CATALOG = [
+export const BASE_API_CATALOG = [
   { name: "log", signature: "log(msg)", category: "Globals", description: "Log a message to the console", snippet: 'log("hello");' },
   { name: "Native.callSymbol", signature: "Native.callSymbol(name, x0..x7)", category: "Native", description: "Call C function by dlsym name", snippet: 'const pid = Native.callSymbol("getpid");' },
   { name: "Native.callSymbolRetain", signature: "Native.callSymbolRetain(name, x0..x7)", category: "Native", description: "Call with ObjC object retention", snippet: 'const obj = Native.callSymbolRetain("objc_msgSend", cls, sel);' },
@@ -62,14 +62,27 @@ export const API_CATALOG = [
   { name: "Host.acquireTaskPort", signature: "Host.acquireTaskPort(pid)", category: "Host", description: "Low-level host-assisted task port acquisition used by Tasks.openForPid(); returns { pid, taskPort, source, access }", snippet: "const task = Host.acquireTaskPort(pid);\nlog(JSON.stringify(task));" },
 ];
 
+export const API_CATALOG = [...BASE_API_CATALOG];
 export const API_CATEGORIES = [];
-const seenCategories = new Set();
-for (const item of API_CATALOG) {
-  if (!seenCategories.has(item.category)) {
-    seenCategories.add(item.category);
-    API_CATEGORIES.push(item.category);
+
+function rebuildCategories() {
+  API_CATEGORIES.splice(0, API_CATEGORIES.length);
+  const seenCategories = new Set();
+  for (const item of API_CATALOG) {
+    if (!seenCategories.has(item.category)) {
+      seenCategories.add(item.category);
+      API_CATEGORIES.push(item.category);
+    }
   }
 }
+
+export function updateApiCatalog(runtimeEntries = []) {
+  const normalizedEntries = Array.isArray(runtimeEntries) ? runtimeEntries.filter(Boolean) : [];
+  API_CATALOG.splice(0, API_CATALOG.length, ...BASE_API_CATALOG, ...normalizedEntries);
+  rebuildCategories();
+}
+
+rebuildCategories();
 
 export const DEFAULT_SCRIPT = `// JSCBridge scratchpad
 log("bridge online");
