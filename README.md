@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./icon.png" alt="DarkForge icon" width="160" height="160">
+  <img src="./assets/readme-icon-rounded.png" alt="DarkForge icon" width="160" height="160">
 </p>
 
 <h1 align="center">DarkForge</h1>
@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img src="./assets/demo.jpg" alt="DarkForge demo">
+  <img src="./assets/readme-demo-rounded.png" alt="DarkForge demo">
 </p>
 
 DarkForge is an iOS-first JavaScript runtime and skill platform for authorized
