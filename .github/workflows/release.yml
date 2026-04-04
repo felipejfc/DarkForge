@@ -2,6 +2,8 @@ name: Build Release Assets
 
 on:
   push:
+    branches:
+      - master
     tags:
       - "v*"
   workflow_dispatch:
