@@ -25,7 +25,9 @@ This file describes local project authorization and intended workflow. It does n
 
 ## Test Environment
 
-- **Primary tablet:** iPad Air 3rd gen (iPad8,9), iPadOS 18.3.2 (22D82)
-- **Phone:** iPhone WL, iOS 18.6 (22G86)
+- **Expected support range:** iOS/iPadOS 18.3 (and possibly slightly earlier 18.x builds) through 26.0.1 when device-specific offsets are available
+- **Primary tablet:** iPad Pro 2nd Gen A12X, iPadOS 18.3.2 (22D82)
+- **Phone:** iPhone 16 Plus, iOS 18.6 (22G86)
 - **macOS host:** 15.7.3 (24G419)
 - **Signing:** local Apple Development override via `Config/Project.local.xcconfig`
+- **Portability note:** other devices/builds can usually be supported with help from users contributing verified offsets

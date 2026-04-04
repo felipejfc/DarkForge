@@ -66,17 +66,23 @@ Known characteristics:
 - The pointer-auth path is arm64e-sensitive.
 - Skills currently use the `jscbridge` runtime.
 
-## Tested Environment
+## Compatibility And Tested Environment
+
+DarkForge should support iOS/iPadOS `18.3` and possibly slightly earlier 18.x
+builds through `26.0.1`, provided the required device/build-specific offsets are
+available and verified.
 
 The current workspace is configured around:
 
-- iPad Air 3rd gen (`iPad8,9`) on iPadOS `18.3.2`
-- iPhone 16 Plus class target (`iPhone17,4`) on iOS `18.6`
+- iPad Pro 2nd Gen A12X on iPadOS `18.3.2`
+- iPhone 16 Plus on iOS `18.6`
 - macOS `15.7.3`
 - Xcode `16.2`
 - Apple Development signing
 
-Treat those as the known-good baseline, not a compatibility promise.
+Treat those as the currently tested environments, not the full compatibility
+boundary. Other devices and builds can usually be supported with help from
+users who contribute and validate the offsets needed for their targets.
 
 ## Repository Layout
 
