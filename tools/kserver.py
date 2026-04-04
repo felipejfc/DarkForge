@@ -28,6 +28,7 @@ import signal
 import sys
 import time
 import uuid
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
@@ -50,6 +51,7 @@ PORT = DEFAULT_WS_PORT
 AGENT_PORT = DEFAULT_AGENT_PORT
 HTTP_PORT = DEFAULT_HTTP_PORT  # HTTP API port for krepl.py to send commands
 LOG_PATH = Path("/tmp/krepl-logs.txt")
+SERVER_LOG_LIMIT = 4000
 EXEC_TIMEOUT = 60  # seconds per exec command
 CONNECT_TIMEOUT = 120  # seconds to wait for initial connection
 AGENT_PING_INTERVAL = 10  # seconds between heartbeat pings
@@ -98,21 +100,31 @@ class C:
 
 _log_file = None
 
+
+def _append_server_log(msg: str):
+    state.server_logs.append(msg)
+    try:
+        asyncio.ensure_future(_broadcast_event("server-log", {"msg": msg}))
+    except RuntimeError:
+        pass
+
 def _open_log():
     global _log_file
     _log_file = open(LOG_PATH, "a", encoding="utf-8")
-    _log_file.write(f"\n{'='*60}\n")
-    _log_file.write(f"Session started at {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-    _log_file.write(f"{'='*60}\n")
+    _log_file.write("\n")
+    _log("=" * 60)
+    _log(f"Session started at {time.strftime('%Y-%m-%d %H:%M:%S')}")
+    _log("=" * 60)
 
 def _log(msg: str):
+    _append_server_log(msg)
     if _log_file:
         _log_file.write(msg + "\n")
         _log_file.flush()
 
 def _close_log():
     if _log_file and not _log_file.closed:
-        _log_file.write(f"Session ended at {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        _log(f"Session ended at {time.strftime('%Y-%m-%d %H:%M:%S')}")
         _log_file.close()
 
 # ---------------------------------------------------------------------------
@@ -266,6 +278,7 @@ class ServerState:
         self.server_url: str | None = None
         self.server_address: str | None = None
         self.browser_clients: set[asyncio.StreamWriter] = set()
+        self.server_logs: deque[str] = deque(maxlen=SERVER_LOG_LIMIT)
         self.jobs: dict[str, dict] = {}
         self.kernel_base: str | None = None
         self.kernel_slide: str | None = None
@@ -539,6 +552,10 @@ async def _emit_status_event():
 
 async def _emit_job_event(job: dict):
     await _broadcast_event("job", _job_payload(job))
+
+
+async def _emit_server_log_reset_event():
+    await _broadcast_event("server-log-reset", {"cleared": True})
 
 
 def _upsert_job(job_id: str, **changes) -> dict:
@@ -2109,6 +2126,15 @@ async def _route_http(method: str, path: str, body: bytes) -> tuple[int, bytes, 
         jobs = sorted(state.jobs.values(), key=lambda item: item.get("createdAt") or "", reverse=True)
         return _json_response({"jobs": [_job_payload(job) for job in jobs]})
 
+    if route == "/api/logs":
+        if method == "GET":
+            return _json_response({"logs": list(state.server_logs)})
+        if method == "DELETE":
+            state.server_logs.clear()
+            await _emit_server_log_reset_event()
+            return _json_response({"ok": True})
+        return _json_response({"error": f"Method not allowed: {method}"}, status=405)
+
     if route.startswith("/api/jobs/") and method == "GET":
         job_path = unquote(route.removeprefix("/api/jobs/")).strip("/")
         if job_path.endswith("/logs"):
@@ -2289,6 +2315,10 @@ async def async_main():
     _print_info(f"Starting agent socket on 0.0.0.0:{AGENT_PORT}")
     _print_info(f"Starting HTTP API on 0.0.0.0:{HTTP_PORT}")
     _print_info(f"Logs: {LOG_PATH}")
+    _log(f"Starting WebSocket server on 0.0.0.0:{PORT}")
+    _log(f"Starting agent socket on 0.0.0.0:{AGENT_PORT}")
+    _log(f"Starting HTTP API on 0.0.0.0:{HTTP_PORT}")
+    _log(f"Logs: {LOG_PATH}")
 
     stop_event = asyncio.Event()
 
@@ -2306,6 +2336,7 @@ async def async_main():
         close_timeout=10,
     ) as server:
         _print_status(f"[*] Listening on ws://0.0.0.0:{PORT} (app) + tcp://0.0.0.0:{AGENT_PORT} (agent) + http://0.0.0.0:{HTTP_PORT} (API)")
+        _log(f"Listening on ws://0.0.0.0:{PORT} (app) + tcp://0.0.0.0:{AGENT_PORT} (agent) + http://0.0.0.0:{HTTP_PORT} (API)")
 
         if mode == "script":
             exit_code = await run_script(script_code)

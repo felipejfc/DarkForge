@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "DarkForge Console",
+  "productName": "DarkForge",
   "version": "0.1.0",
   "identifier": "dev.darkforge.console",
   "build": {
@@ -10,7 +10,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "DarkForge Console",
+        "title": "DarkForge",
         "width": 1280,
         "height": 800,
         "minWidth": 900,

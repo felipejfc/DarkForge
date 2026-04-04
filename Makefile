@@ -34,7 +34,7 @@ DESKTOP_BINARIES_DIR    := $(DESKTOP_TAURI_DIR)/binaries
 DESKTOP_TARGET_TRIPLE   ?= $(shell rustc -vV 2>/dev/null | awk '/^host:/ {print $$2}')
 DESKTOP_SIDECAR         := $(DESKTOP_BINARIES_DIR)/kserver-$(DESKTOP_TARGET_TRIPLE)
 DESKTOP_BUNDLE_DIR      := $(DESKTOP_TAURI_DIR)/target/release/bundle
-DESKTOP_APP             := $(DESKTOP_BUNDLE_DIR)/macos/DarkForge Console.app
+DESKTOP_APP             := $(DESKTOP_BUNDLE_DIR)/macos/DarkForge.app
 DESKTOP_DMG             := $(DESKTOP_BUNDLE_DIR)/dmg
 TAURI_ARGS              ?=
 
@@ -45,6 +45,7 @@ ICON_SRC       := icon.png
 .PHONY: help \
         desktop-setup desktop-sidecar desktop-check desktop-dev desktop-build \
         desktop-package desktop-run desktop-install desktop-icon desktop-clean \
+        ios-project \
         ios-build ios-deploy ios-run ios-clean \
         server server-daemon \
         clean
@@ -128,8 +129,8 @@ desktop-run:
 
 desktop-install:
 	@test -d "$(DESKTOP_APP)" || { echo "Not built. Run: make desktop-build"; exit 1; }
-	@ditto "$(DESKTOP_APP)" "/Applications/DarkForge Console.app"
-	@echo "Installed: /Applications/DarkForge Console.app"
+	@ditto "$(DESKTOP_APP)" "/Applications/DarkForge.app"
+	@echo "Installed: /Applications/DarkForge.app"
 
 desktop-icon:
 	@test -f $(ICON_SRC) || { echo "Missing $(ICON_SRC)"; exit 1; }
@@ -146,7 +147,26 @@ desktop-clean:
 
 # ---- iOS -------------------------------------------------------------------
 
-ios-build:
+ios-project:
+	@if [ ! -f "$(IOS_PROJECT)/project.pbxproj" ]; then \
+		if command -v xcodegen >/dev/null 2>&1; then \
+			echo "Generating $(IOS_PROJECT) from project.yml"; \
+			xcodegen generate; \
+		else \
+			echo "Missing $(IOS_PROJECT)/project.pbxproj and xcodegen is not installed"; \
+			exit 1; \
+		fi; \
+	elif [ project.yml -nt "$(IOS_PROJECT)/project.pbxproj" ]; then \
+		if command -v xcodegen >/dev/null 2>&1; then \
+			echo "Regenerating $(IOS_PROJECT) because project.yml is newer"; \
+			xcodegen generate; \
+		else \
+			echo "project.yml is newer than $(IOS_PROJECT)/project.pbxproj, but xcodegen is not installed"; \
+			exit 1; \
+		fi; \
+	fi
+
+ios-build: ios-project
 	@xcodebuild \
 		-project $(IOS_PROJECT) \
 		-scheme $(IOS_SCHEME) \

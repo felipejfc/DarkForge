@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>DarkForge Console</title>
+  <title>DarkForge</title>
   <link rel="stylesheet" href="/assets/styles.css">
 </head>
 <body>
@@ -14,6 +14,7 @@
         <nav class="nav" role="tablist">
           <button id="navSkills" class="nav-tab is-active" type="button" role="tab" aria-selected="true">Skills</button>
           <button id="navEditor" class="nav-tab" type="button" role="tab" aria-selected="false">Editor</button>
+          <button id="navLogs" class="nav-tab" type="button" role="tab" aria-selected="false">Logs</button>
           <button id="navFiles" class="nav-tab" type="button" role="tab" aria-selected="false">Files</button>
         </nav>
       </div>
@@ -62,6 +63,13 @@
           <button id="formatButton" class="btn btn-ghost btn-sm" type="button">Normalize</button>
           <button id="toggleApiRefButton" class="btn btn-ghost btn-sm" type="button">API Ref</button>
           <button id="skillSettingsButton" class="btn btn-ghost btn-sm" type="button">Settings</button>
+          <button
+            id="exitSkillModeButton"
+            class="btn btn-ghost btn-sm"
+            type="button"
+            hidden
+            title="Detach this draft from the selected skill and clear its saved input schema"
+          >Exit Skill</button>
           <button id="deleteSkillButton" class="btn btn-ghost btn-sm btn-danger" type="button" disabled>Delete</button>
           <button id="saveSkillButton" class="btn btn-secondary" type="button">Save</button>
           <button id="runButton" class="btn btn-primary" type="button">
@@ -124,6 +132,27 @@
           <div id="apiRefList" class="api-ref-list"></div>
         </aside>
       </div>
+    </main>
+
+    <!-- Logs View -->
+    <main id="logsView" class="view" hidden>
+      <div class="view-header">
+        <div class="view-header-left">
+          <h1>Logs</h1>
+          <span id="serverLogCount" class="count-badge">0</span>
+        </div>
+        <div class="view-header-right">
+          <span id="serverLogMeta" class="run-meta">Waiting for host activity</span>
+          <button id="copyServerLogsButton" class="btn btn-ghost btn-sm" type="button">Copy</button>
+          <button id="clearServerLogsButton" class="btn btn-ghost btn-sm" type="button">Clear</button>
+        </div>
+      </div>
+      <section class="server-log-panel">
+        <div class="server-log-toolbar">
+          <span class="run-meta">Live `kserver.py` host log stream.</span>
+        </div>
+        <pre id="serverLogOutput" class="server-log-output">No server logs yet.</pre>
+      </section>
     </main>
 
     <!-- Files View -->
@@ -287,6 +316,6 @@
     </button>
   </template>
 
-  <script src="/assets/app.js" defer></script>
+  <script type="module" src="/assets/app.js"></script>
 </body>
 </html>

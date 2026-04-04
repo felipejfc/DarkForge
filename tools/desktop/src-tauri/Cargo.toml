@@ -1,7 +1,7 @@
 [package]
 name = "darkforge-desktop"
 version = "0.1.0"
-description = "DarkForge Console desktop app"
+description = "DarkForge desktop app"
 edition = "2021"
 rust-version = "1.70"
 

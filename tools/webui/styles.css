@@ -431,6 +431,7 @@ button { border: 0; cursor: pointer; }
 }
 
 .btn-ghost:hover { background: rgba(255, 255, 255, 0.08); }
+.btn.copied { color: var(--success); border-color: rgba(127, 255, 212, 0.3); }
 
 .btn-danger { color: var(--danger); }
 .btn-danger:hover { background: rgba(255, 127, 127, 0.08); border-color: rgba(255, 127, 127, 0.25); }
@@ -761,6 +762,41 @@ button { border: 0; cursor: pointer; }
 .result-output { color: var(--text); }
 .result-output.error { color: #ffb0b0; }
 .log-output { color: #a7ffe7; }
+
+/* ---- Logs View ---- */
+.server-log-panel {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(126, 154, 184, 0.14);
+  background: rgba(7, 12, 20, 0.82);
+  overflow: hidden;
+}
+
+.server-log-toolbar {
+  flex: 0 0 auto;
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(126, 154, 184, 0.12);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.server-log-output {
+  flex: 1 1 0;
+  min-height: 0;
+  margin: 0;
+  padding: 14px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.55;
+  font-size: 13px;
+  color: #a7ffe7;
+  background:
+    linear-gradient(180deg, rgba(8, 17, 26, 0.95), rgba(6, 11, 17, 0.98)),
+    radial-gradient(circle at top left, rgba(42, 185, 255, 0.06), transparent 42%);
+}
 
 /* Editor + API Ref layout */
 .editor-and-ref {

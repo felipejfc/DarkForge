@@ -162,6 +162,7 @@ Important files:
 - `tools/krepl.py`
 - `tools/webui/index.html`
 - `tools/webui/app.js`
+- `tools/webui/src/*.js`
 - `tools/webui/styles.css`
 
 Important endpoints:

@@ -5,11 +5,17 @@
 // Actions: "block" | "unblock" | "status"
 
 (() => {
+  const SKILL_VERSION = "2026-04-04-debug1";
   const action = String(skillInput.action || "block").trim().toLowerCase();
   const setImmutable = skillInput.setImmutable !== false;
+  const verbose = skillInput.verbose !== false;
 
   // flags (sys/stat.h on Darwin)
   const UF_IMMUTABLE = 0x00000002;
+  const S_IFMT = 0o170000;
+  const S_IFDIR = 0o040000;
+  const S_IFREG = 0o100000;
+  const S_IFLNK = 0o120000;
 
   // The OTA staging paths softwareupdated uses. Killing these starves every
   // stage of the update pipeline (discovery metadata + staged payload).
@@ -43,11 +49,20 @@
   // Recursive mkdir -p. createDir is single-level (plain mkdir), so walk up
   // and create each missing ancestor. Returns true if the full path exists
   // as a directory at the end.
+  const statKind = (st) => {
+    if (!st || typeof st.mode !== "number") return "other";
+    const kind = st.mode & S_IFMT;
+    if (kind === S_IFDIR) return "dir";
+    if (kind === S_IFREG) return "file";
+    if (kind === S_IFLNK) return "link";
+    return "other";
+  };
+
   const mkdirP = (dir) => {
     if (!dir || dir === "/") return true;
     if (FileUtils.exists(dir)) {
       const st = FileUtils.lstat(dir);
-      return !!(st && st.isDirectory && !st.isLink);
+      return statKind(st) === "dir";
     }
     const parent = dir.substring(0, dir.lastIndexOf("/"));
     if (!mkdirP(parent)) return false;
@@ -58,15 +73,29 @@
   const describe = (path) => {
     const st = FileUtils.lstat(path);
     if (!st) return { path, exists: false };
+    const kind = statKind(st);
     return {
       path,
       exists: true,
-      isDirectory: !!st.isDirectory,
-      isFile: !!st.isFile,
-      isLink: !!st.isLink,
+      isDirectory: kind === "dir",
+      isFile: kind === "file",
+      isLink: kind === "link",
+      kind,
+      mode: st.mode || 0,
       size: st.size || 0,
       flags: st.flags || 0,
     };
+  };
+
+  const formatInfo = (info) => {
+    if (!info || !info.exists) return "missing";
+    return `${info.kind} mode=0${Number(info.mode || 0).toString(8)} size=${info.size || 0} flags=${info.flags || 0}`;
+  };
+
+  const trace = (record, message) => {
+    if (!record.steps) record.steps = [];
+    record.steps.push(message);
+    if (verbose) log(`trace                  ${record.path}: ${message}`);
   };
 
   const isSentinelFile = (info) => {
@@ -80,102 +109,132 @@
   const doBlock = (path) => {
     const before = describe(path);
     const record = { path, before };
+    trace(record, `before ${formatInfo(before)}`);
 
     // Already blocked? Just refresh the immutable flag if requested.
     if (isSentinelFile(before)) {
       record.status = "already-blocked";
-      if (setImmutable) trySetImmutable(path);
+      let immutableRefreshed = false;
+      if (setImmutable) immutableRefreshed = trySetImmutable(path);
+      trace(record, `sentinel already present${setImmutable ? ` immutable-refresh=${immutableRefreshed}` : ""}`);
       record.after = describe(path);
+      trace(record, `after ${formatInfo(record.after)} sentinel=${isSentinelFile(record.after)}`);
       return record;
     }
 
     // Clear any flags on an existing entry so we can remove it.
-    if (before.exists) tryClearFlags(path);
+    if (before.exists) {
+      trace(record, "clearing existing flags");
+      tryClearFlags(path);
+    }
 
     // Remove whatever is currently there.
     if (before.exists) {
       let removed = false;
       if (before.isDirectory && !before.isLink) {
+        trace(record, "removing existing directory recursively");
         removed = FileUtils.deleteDir(path, true);
       } else {
+        trace(record, `removing existing ${before.kind}`);
         removed = FileUtils.deleteFile(path);
       }
       if (!removed) {
         record.status = "error";
         record.error = "failed to remove existing entry";
         record.after = describe(path);
+        trace(record, `remove failed; after ${formatInfo(record.after)}`);
         return record;
       }
+      trace(record, "existing entry removed");
     }
 
     // Ensure full parent chain exists. These paths live under
     // /var/MobileSoftwareUpdate which may not yet be populated on a device
     // that has never staged an OTA.
     const parent = path.substring(0, path.lastIndexOf("/"));
+    trace(record, `ensuring parent ${parent}`);
     if (parent && !mkdirP(parent)) {
       record.status = "error";
       record.error = `failed to create parent directory ${parent}`;
       record.after = describe(path);
+      trace(record, `mkdirP failed; after ${formatInfo(record.after)}`);
       return record;
     }
+    trace(record, "parent ready");
 
     // Drop the sentinel file at the staging path.
+    trace(record, "writing sentinel file");
     if (!FileUtils.writeTextFile(path, SENTINEL_BODY)) {
       record.status = "error";
       record.error = "failed to write sentinel file";
       record.after = describe(path);
+      trace(record, `write failed; after ${formatInfo(record.after)}`);
       return record;
     }
+    trace(record, "sentinel file written");
 
     // Lock it so softwareupdated can't unlink and mkdir over it.
     let immutableOk = false;
-    if (setImmutable) immutableOk = trySetImmutable(path);
+    if (setImmutable) {
+      immutableOk = trySetImmutable(path);
+      trace(record, `immutable set=${immutableOk}`);
+    }
 
     record.status = "blocked";
     record.immutable = immutableOk;
     record.after = describe(path);
+    trace(record, `after ${formatInfo(record.after)} sentinel=${isSentinelFile(record.after)}`);
     return record;
   };
 
   const doUnblock = (path) => {
     const before = describe(path);
     const record = { path, before };
+    trace(record, `before ${formatInfo(before)}`);
 
     if (!before.exists) {
       record.status = "not-present";
+      trace(record, "nothing to remove");
       return record;
     }
 
     if (!isSentinelFile(before)) {
       record.status = "skipped-not-sentinel";
       record.note = "path exists but is not a DarkForge sentinel; leaving untouched";
+      trace(record, "existing entry is not a DarkForge sentinel");
       return record;
     }
 
+    trace(record, "clearing sentinel flags");
     tryClearFlags(path);
+    trace(record, "removing sentinel file");
     if (!FileUtils.deleteFile(path)) {
       record.status = "error";
       record.error = "failed to remove sentinel";
       record.after = describe(path);
+      trace(record, `remove failed; after ${formatInfo(record.after)}`);
       return record;
     }
 
     // Recreate the directory so softwareupdated is happy next run.
+    trace(record, "recreating directory");
     if (!FileUtils.createDir(path)) {
       record.status = "partial";
       record.note = "sentinel removed but directory not recreated";
       record.after = describe(path);
+      trace(record, `recreate failed; after ${formatInfo(record.after)}`);
       return record;
     }
 
     record.status = "unblocked";
     record.after = describe(path);
+    trace(record, `after ${formatInfo(record.after)}`);
     return record;
   };
 
   const doStatus = (path) => {
     const info = describe(path);
-    const record = { path };
+    const record = { path, steps: [`info ${formatInfo(info)}`] };
     if (!info.exists) {
       record.status = "missing";
     } else if (isSentinelFile(info)) {
@@ -198,11 +257,15 @@
     throw new Error(`Unknown action "${action}" (expected block | unblock | status)`);
   }
 
-  log(`block-ota action=${action} targets=${TARGETS.length}`);
+  log(`block-ota version=${SKILL_VERSION} action=${action} targets=${TARGETS.length}`);
   const results = TARGETS.map((p) => {
     try {
       const r = runner(p);
-      log(`${r.status.padEnd(22)} ${p}`);
+      if (r.status === "error" && r.error) {
+        log(`${r.status.padEnd(22)} ${p}: ${r.error}`);
+      } else {
+        log(`${r.status.padEnd(22)} ${p}`);
+      }
       return r;
     } catch (e) {
       const msg = e && e.message ? e.message : String(e);
@@ -254,11 +317,13 @@
   log(headline);
 
   const summary = {
+    skillVersion: SKILL_VERSION,
     ok: !hasErrors,
     alreadyApplied,
     headline,
     action,
     setImmutable,
+    verbose,
     counts,
     results,
     generatedAt: new Date().toISOString(),

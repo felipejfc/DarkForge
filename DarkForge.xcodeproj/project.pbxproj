@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		02BF0756B6A8711118AD7C47 /* SocketSpray.swift in Sources */ = {isa = PBXBuildFile; fileRef = 352F960A97833D782B248896 /* SocketSpray.swift */; };
 		080BF83403B8FC56EC30218C /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 45D3DE9FFCA23B537771CA87 /* Assets.xcassets */; };
+		4F4A8988C4AF4F648535B8A2 /* skills in Resources */ = {isa = PBXBuildFile; fileRef = 9B6A4D84E5A84BE6A51AB858 /* skills */; };
 		08195DEBF36CEF457C37E7EE /* JSCBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CC332E64E6C91C1CDF878FF /* JSCBridge.swift */; };
 		08925990A5071277A9693718 /* PortForge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6799CC810B7FF27BD733E522 /* PortForge.swift */; };
 		08E79DD74FFF919A756FE790 /* IOSurface.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3D9F8657DF7D9030246D4783 /* IOSurface.framework */; };
@@ -73,6 +74,7 @@
 		7B193AF8A95E886AC5051A6A /* FileManagerViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileManagerViewController.swift; sourceTree = "<group>"; };
 		7B391301A7E303F939A4EAA4 /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
 		8A1219AC1CB60EF93DD17040 /* PrivilegeEscalation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivilegeEscalation.swift; sourceTree = "<group>"; };
+		9B6A4D84E5A84BE6A51AB858 /* skills */ = {isa = PBXFileReference; lastKnownFileType = folder; path = skills; sourceTree = "<group>"; };
 		9CC332E64E6C91C1CDF878FF /* JSCBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSCBridge.swift; sourceTree = "<group>"; };
 		A10265119F06961EF011BFB6 /* PACUtils.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PACUtils.swift; sourceTree = "<group>"; };
 		A27794F2A84B38401CEFA1A9 /* MIGFB.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIGFB.swift; sourceTree = "<group>"; };
@@ -149,6 +151,7 @@
 			children = (
 				D26AB369FE8BCD72455C268B /* Config */,
 				216830D1BBCE8FCBA2C8060C /* DarkForge */,
+				9B6A4D84E5A84BE6A51AB858 /* skills */,
 				56A04B19C7F3B6EEF1E98FDC /* Frameworks */,
 				1D95EDB76CA53000857546CB /* Products */,
 			);
@@ -266,6 +269,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				080BF83403B8FC56EC30218C /* Assets.xcassets in Resources */,
+				4F4A8988C4AF4F648535B8A2 /* skills in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

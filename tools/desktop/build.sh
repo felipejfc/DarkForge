@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the DarkForge Console desktop app for the host platform.
+# Build the DarkForge desktop app for the host platform.
 #
 # Pipeline:
 #   1. Freeze tools/kserver.py with PyInstaller -> dist/kserver

@@ -8,6 +8,10 @@
   iOS JavaScript runtime and skill platform for authorized on-device security research
 </p>
 
+<p align="center">
+  <img src="./assets/demo.jpg" alt="DarkForge demo">
+</p>
+
 DarkForge is an iOS-first JavaScript runtime and skill platform for authorized
 security research on owned, controlled, or explicitly permitted devices.
 
