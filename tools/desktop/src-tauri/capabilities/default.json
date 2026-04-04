@@ -1,0 +1,23 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Capabilities needed by the DarkForge desktop shell",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "allow-get-server-runtime",
+    "allow-save-server-config",
+    "allow-restart-server",
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "binaries/kserver",
+          "sidecar": true,
+          "args": true
+        }
+      ]
+    },
+    "shell:allow-kill"
+  ]
+}

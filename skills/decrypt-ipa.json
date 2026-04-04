@@ -1,0 +1,46 @@
+{
+  "name": "Decrypt IPA",
+  "summary": "Stage an installed app bundle, dump decrypted Mach-O pages from a live process, and package an on-device IPA when zip is available.",
+  "runtime": "jscbridge",
+  "executionMode": "job",
+  "entryFile": "decrypt-ipa.js",
+  "inputs": [
+    {
+      "id": "target",
+      "label": "Target App",
+      "type": "app",
+      "required": true
+    },
+    {
+      "id": "launchIfNeeded",
+      "label": "Launch App If Needed",
+      "type": "boolean",
+      "required": false,
+      "defaultValue": true
+    },
+    {
+      "id": "includeExtensions",
+      "label": "Include PlugIns",
+      "type": "boolean",
+      "required": false,
+      "defaultValue": true
+    },
+    {
+      "id": "includeFrameworks",
+      "label": "Include Frameworks",
+      "type": "boolean",
+      "required": false,
+      "defaultValue": true
+    },
+    {
+      "id": "outputSubdir",
+      "label": "Output Subdirectory",
+      "type": "text",
+      "required": false,
+      "defaultValue": "",
+      "placeholder": "session-notes"
+    }
+  ],
+  "createdAt": "2026-04-01T00:00:00+00:00",
+  "updatedAt": "2026-04-01T00:00:00+00:00"
+}

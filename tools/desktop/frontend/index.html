@@ -1,0 +1,687 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DarkForge Console</title>
+  <style>
+    :root {
+      --bg: #0a1017;
+      --panel: rgba(10, 19, 29, 0.78);
+      --panel-strong: rgba(14, 26, 38, 0.92);
+      --panel-border: rgba(126, 154, 184, 0.16);
+      --text: #ebf3fb;
+      --text-dim: #8ea2b7;
+      --accent: #63d2ff;
+      --ok: #4de1a8;
+      --warn: #ffbf69;
+      --danger: #ff7d7d;
+      --radius: 18px;
+      --shadow: 0 24px 80px rgba(0, 0, 0, 0.35);
+      --mono: "SF Mono", "Menlo", "Monaco", monospace;
+      --sans: "Avenir Next", "Segoe UI", sans-serif;
+    }
+
+    html, body {
+      margin: 0;
+      height: 100%;
+      background:
+        radial-gradient(circle at top left, rgba(99, 210, 255, 0.16), transparent 28%),
+        radial-gradient(circle at top right, rgba(255, 191, 105, 0.12), transparent 24%),
+        linear-gradient(180deg, #101924 0%, #0a1017 52%, #070b11 100%);
+      color: var(--text);
+      font-family: var(--sans);
+    }
+
+    body {
+      overflow: hidden;
+    }
+
+    .shell {
+      display: grid;
+      grid-template-rows: auto 1fr;
+      height: 100%;
+      padding: 18px;
+      gap: 14px;
+      box-sizing: border-box;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 16px 18px;
+      border: 1px solid var(--panel-border);
+      border-radius: var(--radius);
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(22px);
+    }
+
+    .brand-block {
+      display: grid;
+      gap: 4px;
+    }
+
+    .eyebrow {
+      color: var(--text-dim);
+      font-size: 0.72rem;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      font-family: var(--mono);
+    }
+
+    .brand {
+      font-size: 1.2rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+    }
+
+    .subhead {
+      color: var(--text-dim);
+      font-size: 0.88rem;
+    }
+
+    .topbar-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 38px;
+      padding: 0 14px;
+      border: 1px solid var(--panel-border);
+      border-radius: 999px;
+      background: rgba(5, 10, 16, 0.5);
+      font-size: 0.88rem;
+    }
+
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--warn);
+      box-shadow: 0 0 0 6px rgba(255, 191, 105, 0.12);
+    }
+
+    .dot.online {
+      background: var(--ok);
+      box-shadow: 0 0 0 6px rgba(77, 225, 168, 0.12);
+    }
+
+    .dot.error {
+      background: var(--danger);
+      box-shadow: 0 0 0 6px rgba(255, 125, 125, 0.12);
+    }
+
+    .btn {
+      border: 1px solid var(--panel-border);
+      background: rgba(255, 255, 255, 0.04);
+      color: var(--text);
+      border-radius: 999px;
+      padding: 10px 14px;
+      font: inherit;
+      cursor: pointer;
+      transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
+    }
+
+    .btn:hover {
+      transform: translateY(-1px);
+      border-color: rgba(99, 210, 255, 0.32);
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    .btn:disabled {
+      opacity: 0.6;
+      cursor: wait;
+      transform: none;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, rgba(99, 210, 255, 0.18), rgba(99, 210, 255, 0.08));
+      border-color: rgba(99, 210, 255, 0.34);
+    }
+
+    .workspace {
+      position: relative;
+      min-height: 0;
+    }
+
+    .frame {
+      width: 100%;
+      height: 100%;
+      border: 1px solid var(--panel-border);
+      border-radius: 22px;
+      background: #03070c;
+      box-shadow: var(--shadow);
+    }
+
+    .placeholder {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      box-sizing: border-box;
+      z-index: 1;
+      pointer-events: none;
+    }
+
+    .placeholder-card {
+      width: min(520px, 100%);
+      border: 1px solid var(--panel-border);
+      border-radius: 28px;
+      background:
+        linear-gradient(180deg, rgba(19, 31, 44, 0.95), rgba(9, 15, 23, 0.95));
+      box-shadow: var(--shadow);
+      padding: 26px;
+      pointer-events: auto;
+    }
+
+    .spinner {
+      width: 34px;
+      height: 34px;
+      border: 2px solid rgba(255, 255, 255, 0.12);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      margin-bottom: 18px;
+      animation: spin 0.9s linear infinite;
+    }
+
+    .placeholder-title {
+      margin: 0 0 8px;
+      font-size: 1.32rem;
+      font-weight: 700;
+    }
+
+    .placeholder-copy {
+      margin: 0;
+      color: var(--text-dim);
+      line-height: 1.6;
+    }
+
+    .meta {
+      margin-top: 18px;
+      display: grid;
+      gap: 8px;
+      color: var(--text-dim);
+      font-size: 0.9rem;
+    }
+
+    code {
+      font-family: var(--mono);
+      font-size: 0.92em;
+      color: var(--text);
+    }
+
+    .error {
+      color: var(--danger);
+      margin-top: 12px;
+      line-height: 1.5;
+    }
+
+    .footer-actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 20px;
+    }
+
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      padding: 20px;
+      background: rgba(3, 6, 10, 0.7);
+      backdrop-filter: blur(12px);
+      z-index: 3;
+    }
+
+    .modal {
+      width: min(520px, 100%);
+      border: 1px solid var(--panel-border);
+      border-radius: 26px;
+      background: var(--panel-strong);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .modal-header,
+    .modal-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 18px 20px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    .modal-footer {
+      border-bottom: 0;
+      border-top: 1px solid rgba(255, 255, 255, 0.06);
+      justify-content: flex-end;
+    }
+
+    .modal-body {
+      padding: 20px;
+      display: grid;
+      gap: 14px;
+    }
+
+    .field-row {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+    }
+
+    .field {
+      display: grid;
+      gap: 7px;
+    }
+
+    .field label {
+      color: var(--text-dim);
+      font-size: 0.82rem;
+      font-family: var(--mono);
+      letter-spacing: 0.03em;
+    }
+
+    .field input {
+      width: 100%;
+      box-sizing: border-box;
+      border: 1px solid var(--panel-border);
+      border-radius: 14px;
+      background: rgba(5, 10, 16, 0.72);
+      color: var(--text);
+      padding: 12px 13px;
+      font: inherit;
+    }
+
+    .field input:focus {
+      outline: none;
+      border-color: rgba(99, 210, 255, 0.42);
+      box-shadow: 0 0 0 3px rgba(99, 210, 255, 0.12);
+    }
+
+    .field-help {
+      color: var(--text-dim);
+      font-size: 0.84rem;
+      line-height: 1.5;
+    }
+
+    .field-help.error {
+      margin: 0;
+    }
+
+    [hidden] {
+      display: none !important;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    @media (max-width: 900px) {
+      .shell {
+        padding: 12px;
+      }
+
+      .topbar {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .topbar-actions {
+        width: 100%;
+        justify-content: flex-start;
+      }
+
+      .field-row {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand-block">
+        <div class="eyebrow">Tauri Shell</div>
+        <div class="brand">DarkForge Console</div>
+        <div class="subhead">Embedded host bridge with configurable ports and restart control.</div>
+      </div>
+      <div class="topbar-actions">
+        <div class="pill" title="Current embedded server state">
+          <span id="statusDot" class="dot"></span>
+          <span id="statusText">Checking server state…</span>
+        </div>
+        <button id="restartButton" class="btn btn-primary" type="button">Restart Server</button>
+        <button id="settingsButton" class="btn" type="button">Ports</button>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <iframe id="serverFrame" class="frame" title="DarkForge Server UI" hidden></iframe>
+
+      <section id="placeholder" class="placeholder">
+        <div class="placeholder-card">
+          <div class="spinner" id="spinner"></div>
+          <h1 id="placeholderTitle" class="placeholder-title">Starting embedded server</h1>
+          <p id="placeholderCopy" class="placeholder-copy">
+            Waiting for the bundled `kserver` sidecar to accept HTTP connections.
+          </p>
+          <div class="meta">
+            <div>Configured ports: <code id="portSummary">ws 9090 · agent 9091 · http 9092</code></div>
+            <div>Target URL: <code id="targetUrl">http://127.0.0.1:9092/</code></div>
+            <div id="restartNotice" hidden>Saved ports differ from the active server. Restart to apply them.</div>
+          </div>
+          <p id="errorText" class="error" hidden></p>
+          <div class="footer-actions">
+            <button id="retryButton" class="btn btn-primary" type="button">Start / Retry</button>
+            <button id="placeholderSettingsButton" class="btn" type="button">Edit Ports</button>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="settingsModal" class="modal-backdrop" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+      <div class="modal-header">
+        <div>
+          <div class="eyebrow">Server Settings</div>
+          <strong id="settingsTitle">Listen Ports</strong>
+        </div>
+        <button id="closeSettingsButton" class="btn" type="button">Close</button>
+      </div>
+      <div class="modal-body">
+        <div class="field-row">
+          <div class="field">
+            <label for="wsPortInput">WebSocket</label>
+            <input id="wsPortInput" type="number" min="1" max="65535" inputmode="numeric">
+          </div>
+          <div class="field">
+            <label for="agentPortInput">Agent TCP</label>
+            <input id="agentPortInput" type="number" min="1" max="65535" inputmode="numeric">
+          </div>
+          <div class="field">
+            <label for="httpPortInput">HTTP / UI</label>
+            <input id="httpPortInput" type="number" min="1" max="65535" inputmode="numeric">
+          </div>
+        </div>
+        <p class="field-help">
+          The bundled sidecar will bind these three ports on <code>127.0.0.1</code>. The HTTP port is what this desktop shell embeds.
+        </p>
+        <p id="settingsError" class="field-help error" hidden></p>
+      </div>
+      <div class="modal-footer">
+        <button id="savePortsButton" class="btn" type="button">Save</button>
+        <button id="saveAndRestartButton" class="btn btn-primary" type="button">Save &amp; Restart</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const invoke = window.__TAURI__?.core?.invoke;
+    const els = {
+      serverFrame: document.getElementById("serverFrame"),
+      statusDot: document.getElementById("statusDot"),
+      statusText: document.getElementById("statusText"),
+      placeholder: document.getElementById("placeholder"),
+      spinner: document.getElementById("spinner"),
+      placeholderTitle: document.getElementById("placeholderTitle"),
+      placeholderCopy: document.getElementById("placeholderCopy"),
+      portSummary: document.getElementById("portSummary"),
+      targetUrl: document.getElementById("targetUrl"),
+      errorText: document.getElementById("errorText"),
+      restartNotice: document.getElementById("restartNotice"),
+      retryButton: document.getElementById("retryButton"),
+      restartButton: document.getElementById("restartButton"),
+      settingsButton: document.getElementById("settingsButton"),
+      placeholderSettingsButton: document.getElementById("placeholderSettingsButton"),
+      settingsModal: document.getElementById("settingsModal"),
+      closeSettingsButton: document.getElementById("closeSettingsButton"),
+      wsPortInput: document.getElementById("wsPortInput"),
+      agentPortInput: document.getElementById("agentPortInput"),
+      httpPortInput: document.getElementById("httpPortInput"),
+      settingsError: document.getElementById("settingsError"),
+      savePortsButton: document.getElementById("savePortsButton"),
+      saveAndRestartButton: document.getElementById("saveAndRestartButton"),
+    };
+
+    const shellState = {
+      runtime: null,
+      frameUrl: "",
+      refreshTimer: null,
+      busy: false,
+    };
+
+    function requireInvoke() {
+      if (!invoke) {
+        throw new Error("Tauri IPC is unavailable in this window.");
+      }
+      return invoke;
+    }
+
+    async function call(command, args = {}) {
+      return requireInvoke()(command, args);
+    }
+
+    function setBusy(nextBusy) {
+      shellState.busy = nextBusy;
+      els.retryButton.disabled = nextBusy;
+      els.restartButton.disabled = nextBusy;
+      els.savePortsButton.disabled = nextBusy;
+      els.saveAndRestartButton.disabled = nextBusy;
+    }
+
+    function openSettings() {
+      populatePortInputs(shellState.runtime?.config);
+      els.settingsError.hidden = true;
+      els.settingsModal.hidden = false;
+    }
+
+    function closeSettings() {
+      els.settingsModal.hidden = true;
+    }
+
+    function populatePortInputs(config) {
+      const next = config || {
+        wsPort: 9090,
+        agentPort: 9091,
+        httpPort: 9092,
+      };
+      els.wsPortInput.value = String(next.wsPort);
+      els.agentPortInput.value = String(next.agentPort);
+      els.httpPortInput.value = String(next.httpPort);
+    }
+
+    function readPortInputs() {
+      const parsePort = (label, value) => {
+        const port = Number.parseInt(String(value || "").trim(), 10);
+        if (!Number.isInteger(port) || port < 1 || port > 65535) {
+          throw new Error(`${label} port must be between 1 and 65535.`);
+        }
+        return port;
+      };
+
+      const config = {
+        wsPort: parsePort("WebSocket", els.wsPortInput.value),
+        agentPort: parsePort("Agent", els.agentPortInput.value),
+        httpPort: parsePort("HTTP", els.httpPortInput.value),
+      };
+
+      const distinct = new Set([config.wsPort, config.agentPort, config.httpPort]);
+      if (distinct.size !== 3) {
+        throw new Error("WebSocket, agent, and HTTP ports must be distinct.");
+      }
+      return config;
+    }
+
+    function configuredUrl(runtime) {
+      return runtime?.configuredServerUrl || "http://127.0.0.1:9092/";
+    }
+
+    function activeUrl(runtime) {
+      return runtime?.activeServerUrl || configuredUrl(runtime);
+    }
+
+    function portSummary(config) {
+      if (!config) return "ws 9090 · agent 9091 · http 9092";
+      return `ws ${config.wsPort} · agent ${config.agentPort} · http ${config.httpPort}`;
+    }
+
+    function renderRuntime(runtime) {
+      shellState.runtime = runtime;
+      const currentTarget = runtime.running || runtime.starting ? activeUrl(runtime) : configuredUrl(runtime);
+
+      els.portSummary.textContent = portSummary(runtime.config);
+      els.targetUrl.textContent = currentTarget;
+      els.restartNotice.hidden = !runtime.restartRequired;
+      els.errorText.hidden = !runtime.lastError;
+      els.errorText.textContent = runtime.lastError || "";
+
+      els.statusDot.className = "dot";
+      els.spinner.hidden = false;
+
+      if (runtime.running) {
+        els.statusDot.classList.add("online");
+        els.statusText.textContent = runtime.managedChild ? "Bundled server running" : "External server detected";
+        els.placeholder.hidden = true;
+        els.serverFrame.hidden = false;
+        if (shellState.frameUrl !== currentTarget) {
+          shellState.frameUrl = currentTarget;
+          els.serverFrame.src = currentTarget;
+        }
+        return;
+      }
+
+      els.serverFrame.hidden = true;
+      if (shellState.frameUrl) {
+        shellState.frameUrl = "";
+        els.serverFrame.src = "about:blank";
+      }
+
+      els.placeholder.hidden = false;
+      if (runtime.starting) {
+        els.statusText.textContent = "Starting bundled server…";
+        els.placeholderTitle.textContent = "Starting embedded server";
+        els.placeholderCopy.textContent = "Waiting for the configured HTTP port to become reachable.";
+      } else if (runtime.lastError) {
+        els.statusDot.classList.add("error");
+        els.spinner.hidden = true;
+        els.statusText.textContent = "Server offline";
+        els.placeholderTitle.textContent = "Server failed to start";
+        els.placeholderCopy.textContent = "Adjust the ports if needed, then retry from this shell.";
+      } else {
+        els.spinner.hidden = true;
+        els.statusText.textContent = "Server idle";
+        els.placeholderTitle.textContent = "Server not running";
+        els.placeholderCopy.textContent = "Start the bundled sidecar or point this shell at an already-running local server on the configured HTTP port.";
+      }
+    }
+
+    async function refreshRuntime() {
+      try {
+        const runtime = await call("get_server_runtime");
+        renderRuntime(runtime);
+      } catch (error) {
+        els.statusDot.className = "dot error";
+        els.statusText.textContent = "Desktop shell unavailable";
+        els.placeholder.hidden = false;
+        els.spinner.hidden = true;
+        els.errorText.hidden = false;
+        els.errorText.textContent = error.message || String(error);
+      }
+    }
+
+    async function restartServer() {
+      setBusy(true);
+      els.placeholder.hidden = false;
+      els.serverFrame.hidden = true;
+      els.spinner.hidden = false;
+      els.statusText.textContent = "Restarting bundled server…";
+      els.statusDot.className = "dot";
+      els.errorText.hidden = true;
+      if (shellState.frameUrl) {
+        shellState.frameUrl = "";
+        els.serverFrame.src = "about:blank";
+      }
+      try {
+        const runtime = await call("restart_server");
+        renderRuntime(runtime);
+      } catch (error) {
+        els.errorText.hidden = false;
+        els.errorText.textContent = error.message || String(error);
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    async function savePorts({ restart }) {
+      setBusy(true);
+      els.settingsError.hidden = true;
+      try {
+        const config = readPortInputs();
+        const runtime = await call("save_server_config", { config });
+        renderRuntime(runtime);
+        if (restart) {
+          closeSettings();
+          await restartServer();
+        } else {
+          closeSettings();
+        }
+      } catch (error) {
+        els.settingsError.hidden = false;
+        els.settingsError.textContent = error.message || String(error);
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    function installEvents() {
+      els.settingsButton.addEventListener("click", openSettings);
+      els.placeholderSettingsButton.addEventListener("click", openSettings);
+      els.closeSettingsButton.addEventListener("click", closeSettings);
+      els.settingsModal.addEventListener("click", (event) => {
+        if (event.target === els.settingsModal) {
+          closeSettings();
+        }
+      });
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          closeSettings();
+        }
+      });
+
+      els.retryButton.addEventListener("click", restartServer);
+      els.restartButton.addEventListener("click", restartServer);
+      els.savePortsButton.addEventListener("click", () => savePorts({ restart: false }));
+      els.saveAndRestartButton.addEventListener("click", () => savePorts({ restart: true }));
+    }
+
+    async function init() {
+      installEvents();
+      await refreshRuntime();
+      shellState.refreshTimer = window.setInterval(refreshRuntime, 1500);
+    }
+
+    init().catch((error) => {
+      els.statusDot.className = "dot error";
+      els.statusText.textContent = "Startup failed";
+      els.placeholder.hidden = false;
+      els.spinner.hidden = true;
+      els.errorText.hidden = false;
+      els.errorText.textContent = error.message || String(error);
+    });
+  </script>
+</body>
+</html>

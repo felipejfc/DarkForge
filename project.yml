@@ -1,0 +1,36 @@
+name: DarkForge
+options:
+  deploymentTarget:
+    iOS: "15.0"
+  xcodeVersion: "16.2"
+
+targets:
+  DarkForge:
+    type: application
+    platform: iOS
+    configFiles:
+      Debug: Config/Project.xcconfig
+      Release: Config/Project.xcconfig
+    sources:
+      - DarkForge
+    resources:
+      - path: skills
+    settings:
+      base:
+        INFOPLIST_FILE: DarkForge/Info.plist
+        CODE_SIGN_ENTITLEMENTS: DarkForge/DarkForge.entitlements
+        SWIFT_OBJC_BRIDGING_HEADER: DarkForge/Bridging/DarkForge-Bridging-Header.h
+        PRODUCT_BUNDLE_IDENTIFIER: $(DARKFORGE_BUNDLE_IDENTIFIER)
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SWIFT_VERSION: "5.0"
+        ENABLE_BITCODE: "NO"
+        ENABLE_DEBUG_DYLIB: "NO"
+        OTHER_CFLAGS: ["-Wno-availability"]
+        DEVELOPMENT_TEAM: $(DARKFORGE_DEVELOPMENT_TEAM)
+        ARCHS: "arm64e"
+    dependencies:
+      - sdk: IOSurface.framework
+      - sdk: IOKit.framework
+      - sdk: CoreServices.framework
+      - sdk: Security.framework
+      - sdk: JavaScriptCore.framework

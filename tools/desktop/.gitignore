@@ -1,0 +1,17 @@
+# Rust build output
+src-tauri/target/
+src-tauri/gen/
+
+# PyInstaller / local server build artifacts
+.venv/
+build/
+dist/
+*.pyc
+__pycache__/
+
+# Vendored sidecar binaries (produced by build.sh)
+src-tauri/binaries/kserver
+src-tauri/binaries/kserver-*
+
+# macOS
+.DS_Store

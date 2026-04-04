@@ -1,0 +1,71 @@
+# Local research inputs
+/references/
+/ipsw/
+*.ipsw
+
+# Local signing and path/device config
+/Config/*.local.xcconfig
+/Makefile.local
+
+# Native build artifacts
+tools/encodeme
+tools/patch_cookie
+tools/verify_oob
+/build/
+/DerivedData/
+/.deriveddata-darkforge/
+/.deriveddata-darkforge-iphonewl/
+/.deriveddata*
+/.build/
+/.swiftpm/
+*.dSYM/
+*.dSYM
+*.ipa
+*.xcarchive
+*.xcresult
+
+# Desktop / server / Tauri build output
+/tools/desktop/.venv/
+/tools/desktop/build/
+/tools/desktop/dist/
+/tools/desktop/src-tauri/target/
+/tools/desktop/src-tauri/gen/
+/tools/desktop/src-tauri/binaries/kserver
+/tools/desktop/src-tauri/binaries/kserver-*
+/tools/desktop/frontend/dist/
+
+# Intermediate data files
+/data/
+/tools/output.caf
+/tools/output_orig.caf
+exploit_v2.caf
+exploit_v3.caf
+exploit_v4.caf
+exploit_v5.caf
+exploit_v6.caf
+exploit_v7.caf
+exploit_v12.caf
+
+# Xcode user-specific files
+xcuserdata/
+*.xcuserdatad/
+*.xcuserstate
+*.xcbkptlist
+*.xcscmblueprint
+*.xccheckout
+*.moved-aside
+
+# Dependency managers
+Pods/
+Carthage/Build/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Tooling / OS metadata
+.claude/
+.DS_Store

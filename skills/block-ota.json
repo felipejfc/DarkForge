@@ -1,0 +1,26 @@
+{
+  "name": "Block OTA Updates",
+  "summary": "Block iOS OTA updates by neutering the MobileAsset SoftwareUpdate staging directories. Reversible via unblock/status actions.",
+  "runtime": "jscbridge",
+  "executionMode": "interactive",
+  "entryFile": "block-ota.js",
+  "inputs": [
+    {
+      "id": "action",
+      "label": "Action",
+      "type": "select",
+      "required": false,
+      "defaultValue": "block",
+      "options": ["block", "unblock", "status"]
+    },
+    {
+      "id": "setImmutable",
+      "label": "Set UF_IMMUTABLE Flag",
+      "type": "boolean",
+      "required": false,
+      "defaultValue": true
+    }
+  ],
+  "createdAt": "2026-04-04T00:00:00+00:00",
+  "updatedAt": "2026-04-04T00:00:00+00:00"
+}

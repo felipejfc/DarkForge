@@ -1,0 +1,7 @@
+// Shared defaults committed to the repo.
+// Override them locally in Config/Project.local.xcconfig.
+
+DARKFORGE_BUNDLE_IDENTIFIER = com.example.darkforge
+DARKFORGE_DEVELOPMENT_TEAM =
+
+#include? "Project.local.xcconfig"

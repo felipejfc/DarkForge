@@ -1,0 +1,5 @@
+// Copy this file to Config/Project.local.xcconfig and customize it for
+// your Apple Development team and bundle identifier.
+
+DARKFORGE_BUNDLE_IDENTIFIER = com.example.darkforge
+DARKFORGE_DEVELOPMENT_TEAM = ABCDE12345

@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DarkForge Console</title>
+  <link rel="stylesheet" href="/assets/styles.css">
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="topbar-left">
+        <span class="brand">DarkForge</span>
+        <nav class="nav" role="tablist">
+          <button id="navSkills" class="nav-tab is-active" type="button" role="tab" aria-selected="true">Skills</button>
+          <button id="navEditor" class="nav-tab" type="button" role="tab" aria-selected="false">Editor</button>
+          <button id="navFiles" class="nav-tab" type="button" role="tab" aria-selected="false">Files</button>
+        </nav>
+      </div>
+      <div class="topbar-right">
+        <label class="target-selector">
+          <span class="target-label">Target</span>
+          <select id="targetSelect">
+            <option value="auto">Auto</option>
+            <option value="agent">Agent</option>
+            <option value="bridge">Bridge</option>
+          </select>
+        </label>
+        <div class="status-pill">
+          <span id="statusDot" class="status-dot offline"></span>
+          <strong id="statusLabel">Checking&hellip;</strong>
+        </div>
+      </div>
+    </header>
+
+    <!-- Skills View -->
+    <main id="skillsView" class="view">
+      <div class="view-header">
+        <div class="view-header-left">
+          <h1>Skills</h1>
+          <span id="statusSkillCount" class="count-badge">0</span>
+        </div>
+        <div class="view-header-right">
+          <input id="skillSearch" type="search" placeholder="Search skills..." class="search-input">
+          <button id="newSkillButton" class="btn btn-primary" type="button">+ New Skill</button>
+        </div>
+      </div>
+      <div id="skillGrid" class="skill-grid"></div>
+    </main>
+
+    <!-- Editor View -->
+    <main id="editorView" class="view" hidden>
+      <div class="editor-bar">
+        <div class="editor-bar-left">
+          <button id="backToSkills" class="btn btn-ghost btn-sm" type="button">&larr; Skills</button>
+          <div class="editor-bar-title">
+            <input id="skillName" type="text" class="skill-name-input" placeholder="Untitled Skill">
+            <span id="dirtyIndicator" class="dirty-dot" hidden title="Unsaved changes"></span>
+          </div>
+        </div>
+        <div class="editor-bar-right">
+          <button id="formatButton" class="btn btn-ghost btn-sm" type="button">Normalize</button>
+          <button id="toggleApiRefButton" class="btn btn-ghost btn-sm" type="button">API Ref</button>
+          <button id="skillSettingsButton" class="btn btn-ghost btn-sm" type="button">Settings</button>
+          <button id="deleteSkillButton" class="btn btn-ghost btn-sm btn-danger" type="button" disabled>Delete</button>
+          <button id="saveSkillButton" class="btn btn-secondary" type="button">Save</button>
+          <button id="runButton" class="btn btn-primary" type="button">
+            <span class="btn-spinner"></span>
+            Run
+          </button>
+        </div>
+      </div>
+
+      <div class="editor-hint">
+        <code>Cmd+Enter</code> run
+        <code>Cmd+S</code> save
+        <code>Tab</code> indent
+      </div>
+
+      <div class="editor-and-ref">
+        <div id="splitWorkspace" class="split-workspace console-collapsed">
+          <div class="editor-frame" id="editorFrame">
+            <div id="lineNumbers" class="line-numbers" aria-hidden="true"></div>
+            <pre id="highlightLayer" class="highlight-layer" aria-hidden="true"></pre>
+            <textarea
+              id="editorInput"
+              class="editor-input"
+              spellcheck="false"
+              autocomplete="off"
+              autocorrect="off"
+              autocapitalize="none"
+            ></textarea>
+          </div>
+
+          <button id="consoleSplitter" class="console-splitter" type="button" aria-label="Resize console">
+            <span></span>
+          </button>
+
+          <section id="consolePanel" class="console-panel">
+            <div class="console-header">
+              <div class="console-tabs" role="tablist" aria-label="Console tabs">
+                <button id="resultTab" class="console-tab is-active" type="button" role="tab" aria-selected="true">Result</button>
+                <button id="logsTab" class="console-tab" type="button" role="tab" aria-selected="false">Logs</button>
+              </div>
+              <div class="console-actions">
+                <span id="runMeta" class="run-meta">Idle</span>
+                <button id="consoleCopyBtn" class="console-copy-btn" type="button">Copy</button>
+                <button id="clearLogsButton" class="btn btn-ghost btn-sm" type="button">Clear</button>
+                <button id="toggleConsoleButton" class="btn btn-ghost btn-sm" type="button">Hide</button>
+              </div>
+            </div>
+            <div class="console-body">
+              <pre id="resultOutput" class="console-output result-output is-active">No script executed yet.</pre>
+              <pre id="logOutput" class="console-output log-output">No logs yet.</pre>
+            </div>
+          </section>
+        </div>
+
+        <aside id="apiRefPanel" class="api-ref-panel" hidden>
+          <div class="api-ref-header">
+            <h3>API Reference</h3>
+          </div>
+          <input id="apiRefSearch" class="api-ref-search" type="search" placeholder="Filter API..." spellcheck="false" autocomplete="off">
+          <div id="apiRefList" class="api-ref-list"></div>
+        </aside>
+      </div>
+    </main>
+
+    <!-- Files View -->
+    <main id="filesView" class="view" hidden>
+      <div class="file-toolbar">
+        <div class="file-toolbar-main">
+          <button id="fileRootButton" class="btn btn-ghost btn-sm" type="button" title="Go to root (/)">/</button>
+          <button id="fileUpButton" class="btn btn-ghost btn-sm" type="button" title="Parent directory (Backspace)">&uarr;</button>
+          <button id="fileRefreshButton" class="btn btn-ghost btn-sm" type="button" title="Refresh (F5)">Refresh</button>
+          <span class="toolbar-sep"></span>
+          <button id="fileNewFolderButton" class="btn btn-secondary btn-sm" type="button">New Folder</button>
+          <button id="fileNewFileButton" class="btn btn-secondary btn-sm" type="button">New File</button>
+          <button id="fileUploadButton" class="btn btn-primary btn-sm" type="button">Upload</button>
+          <input id="fileUploadInput" type="file" multiple hidden>
+          <span class="toolbar-sep"></span>
+          <span id="fileStatus" class="run-meta">Idle</span>
+        </div>
+      </div>
+
+      <!-- Breadcrumb bar -->
+      <div class="file-breadcrumb-bar">
+        <nav id="fileBreadcrumbs" class="file-breadcrumbs" aria-label="File path"></nav>
+        <button id="fileEditPathButton" class="btn btn-ghost btn-xs" type="button" title="Edit path">Edit</button>
+        <input id="filePathInput" class="file-path-inline" type="text" value="/" spellcheck="false" autocomplete="off" hidden>
+      </div>
+
+      <div class="file-workspace">
+        <section class="file-browser" id="fileBrowserPanel">
+          <!-- Search bar -->
+          <div class="file-search-bar">
+            <input id="fileSearchInput" type="search" placeholder="Filter files..." class="file-search-input" spellcheck="false" autocomplete="off">
+            <span id="fileListMeta" class="run-meta">0 items</span>
+          </div>
+
+          <!-- Sort header -->
+          <div class="file-sort-header">
+            <button class="file-sort-col file-sort-name is-active" data-sort="name" type="button">Name <span class="sort-arrow">&darr;</span></button>
+            <button class="file-sort-col file-sort-size" data-sort="size" type="button">Size <span class="sort-arrow"></span></button>
+            <button class="file-sort-col file-sort-type" data-sort="type" type="button">Type <span class="sort-arrow"></span></button>
+          </div>
+
+          <div id="uploadProgress" class="upload-progress" hidden>
+            <div class="upload-progress-label" id="uploadProgressLabel">Uploading...</div>
+            <div class="upload-progress-bar"><div class="upload-progress-fill" id="uploadProgressFill"></div></div>
+          </div>
+          <div id="fileList" class="file-list" tabindex="0"></div>
+        </section>
+
+        <!-- Resizable splitter -->
+        <div id="fileSplitter" class="file-splitter" title="Drag to resize">
+          <span class="file-splitter-grip"></span>
+        </div>
+
+        <section class="file-preview" id="filePreviewPanel">
+          <div class="panel-header compact">
+            <div>
+              <h3 id="filePreviewTitle">Select a file</h3>
+              <div id="filePreviewMeta" class="run-meta">No file selected</div>
+            </div>
+            <div class="file-preview-actions">
+              <button id="fileCopyPathButton" class="btn btn-ghost btn-sm" type="button" disabled title="Copy full path">Copy Path</button>
+              <button id="fileDownloadButton" class="btn btn-ghost btn-sm" type="button" disabled title="Download file">Download</button>
+              <button id="fileRenameButton" class="btn btn-ghost btn-sm" type="button" disabled>Rename</button>
+              <button id="fileDeleteButton" class="btn btn-ghost btn-sm btn-danger" type="button" disabled>Delete</button>
+              <button id="fileReloadButton" class="btn btn-ghost btn-sm" type="button" disabled>Reload</button>
+              <button id="fileSaveButton" class="btn btn-primary btn-sm" type="button" disabled>
+                <span class="btn-spinner"></span>
+                Save
+              </button>
+            </div>
+          </div>
+
+          <div id="filePreviewEmpty" class="file-preview-empty">
+            Select a file to view and edit. Use arrow keys to navigate, Enter to open.
+          </div>
+          <textarea id="fileEditor" class="file-editor" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="none" disabled></textarea>
+        </section>
+      </div>
+    </main>
+
+    <!-- File context menu -->
+    <div id="fileContextMenu" class="context-menu" hidden>
+      <button class="context-menu-item" data-action="open" type="button">Open</button>
+      <button class="context-menu-item" data-action="copypath" type="button">Copy Path</button>
+      <button class="context-menu-item" data-action="download" type="button">Download</button>
+      <hr class="context-menu-sep">
+      <button class="context-menu-item" data-action="rename" type="button">Rename</button>
+      <button class="context-menu-item" data-action="delete" type="button">Delete</button>
+    </div>
+  </div>
+
+  <!-- Run Inputs Modal -->
+  <div id="runModal" class="modal-overlay" hidden>
+    <div class="modal">
+      <div class="modal-header">
+        <h2 id="runModalTitle">Run Skill</h2>
+        <button class="modal-close" data-dismiss="runModal" type="button">&times;</button>
+      </div>
+      <div id="runModalBody" class="modal-body"></div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" data-dismiss="runModal" type="button">Cancel</button>
+        <button id="runModalExecute" class="btn btn-primary" type="button">
+          <span class="btn-spinner"></span>
+          Execute
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Skill Settings Modal -->
+  <div id="settingsModal" class="modal-overlay" hidden>
+    <div class="modal modal-wide">
+      <div class="modal-header">
+        <h2>Skill Settings</h2>
+        <button class="modal-close" data-dismiss="settingsModal" type="button">&times;</button>
+      </div>
+      <div class="modal-body">
+        <label class="field">
+          <span>Notes / Summary</span>
+          <textarea id="skillSummary" rows="3" placeholder="What this skill does..."></textarea>
+        </label>
+        <div class="field-row">
+          <label class="field">
+            <span>Runtime</span>
+            <select id="skillRuntime">
+              <option value="jscbridge">JSCBridge</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Execution Mode</span>
+            <select id="skillExecutionMode">
+              <option value="interactive">Interactive</option>
+              <option value="job">Detached Job</option>
+            </select>
+          </label>
+        </div>
+        <label class="field">
+          <span>Input Schema (JSON)</span>
+          <textarea
+            id="skillInputsSchema"
+            rows="10"
+            placeholder='[{"id":"target","label":"Bundle ID or Name","type":"text","required":true}]'
+          ></textarea>
+        </label>
+        <div id="skillSchemaStatus" class="field-help">No structured inputs defined.</div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" data-dismiss="settingsModal" type="button">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toastContainer" class="toast-container"></div>
+
+  <template id="fileItemTemplate">
+    <button class="file-item" type="button">
+      <span class="file-item-icon"></span>
+      <span class="file-item-name"></span>
+      <span class="file-item-size"></span>
+      <span class="file-item-type"></span>
+    </button>
+  </template>
+
+  <script src="/assets/app.js" defer></script>
+</body>
+</html>

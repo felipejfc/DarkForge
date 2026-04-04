@@ -1,0 +1,10 @@
+{
+  "name": "List Installed Apps",
+  "summary": "Enumerate installed apps and return their display names with bundle identifiers.",
+  "runtime": "jscbridge",
+  "executionMode": "interactive",
+  "entryFile": "list-installed-apps.js",
+  "inputs": [],
+  "createdAt": "2026-04-01T00:00:00+00:00",
+  "updatedAt": "2026-04-01T00:00:00+00:00"
+}
