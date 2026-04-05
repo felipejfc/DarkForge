@@ -116,10 +116,8 @@ desktop-dev: desktop-sidecar
 	@cd "$(DESKTOP_TAURI_DIR)" && cargo tauri --version >/dev/null 2>&1 || { echo "tauri-cli not installed. Run: cargo install tauri-cli --version '^2.0.0'"; exit 1; }
 	@cd "$(DESKTOP_TAURI_DIR)" && cargo tauri dev $(TAURI_ARGS)
 
-desktop-build: desktop-sidecar
-	@command -v cargo >/dev/null 2>&1 || { echo "cargo not found"; exit 1; }
-	@cd "$(DESKTOP_TAURI_DIR)" && cargo tauri --version >/dev/null 2>&1 || { echo "tauri-cli not installed. Run: cargo install tauri-cli --version '^2.0.0'"; exit 1; }
-	@cd "$(DESKTOP_TAURI_DIR)" && cargo tauri build $(TAURI_ARGS)
+desktop-build:
+	@./tools/desktop/build.sh $(TAURI_ARGS)
 
 desktop-package: desktop-build
 

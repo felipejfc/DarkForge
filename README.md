@@ -99,6 +99,9 @@ need to reproduce the release packages yourself.
    - `DarkForge-<tag>-unsigned.ipa`
 2. Open the `.dmg`, drag `DarkForge.app` into `/Applications`, and launch it on
    your Mac.
+   If macOS blocks the first launch because the developer cannot be verified,
+   open the app once, then go to System Settings -> Privacy & Security and use
+   `Open Anyway` for `DarkForge`.
 3. Open Sideloadly, choose the downloaded `DarkForge-<tag>-unsigned.ipa`, sign
    it with your Apple ID or development certificate, and install it on the
    target iPhone or iPad.
