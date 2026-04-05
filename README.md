@@ -84,6 +84,41 @@ Treat those as the currently tested environments, not the full compatibility
 boundary. Other devices and builds can usually be supported with help from
 users who contribute and validate the offsets needed for their targets.
 
+## Installing
+
+If you want to run DarkForge instead of developing it, use the latest release
+artifacts first. Build from source when you want a local development build or
+need to reproduce the release packages yourself.
+
+### Option 1. Install The Latest Release
+
+1. Download the latest desktop UI `.dmg` and iOS `.ipa` from
+   [GitHub Releases](https://github.com/felipejfc/DarkForge/releases/latest).
+   Current release assets are published as:
+   - `DarkForge-<tag>-macos-arm64.dmg`
+   - `DarkForge-<tag>-unsigned.ipa`
+2. Open the `.dmg`, drag `DarkForge.app` into `/Applications`, and launch it on
+   your Mac.
+3. Open Sideloadly, choose the downloaded `DarkForge-<tag>-unsigned.ipa`, sign
+   it with your Apple ID or development certificate, and install it on the
+   target iPhone or iPad.
+4. When Sideloadly finishes, open `DarkForge` on the device.
+
+### Option 2. Build From Source
+
+If you prefer to build both components yourself:
+
+- clone the repo and follow the Quick Start below for prerequisites, signing,
+  and host setup
+- build the macOS desktop UI with `make desktop-build`, then use
+  `make desktop-run` or `make desktop-install`
+- build the iOS app with `make ios-build` or the `xcodebuild` flow in
+  [`docs/BUILD-AND-DEPLOY.md`](./docs/BUILD-AND-DEPLOY.md)
+- if you specifically want a Sideloadly-style `.ipa` from source, follow the
+  packaging flow documented in
+  [`docs/GITHUB-RELEASES.md`](./docs/GITHUB-RELEASES.md) or mirror
+  [`.github/workflows/release.yml`](./.github/workflows/release.yml)
+
 ## Repository Layout
 
 ```text
@@ -94,9 +129,9 @@ skills/                    Built-in skill manifests and JS entry files
 scripts/                   Ad hoc research and validation scripts
 docs/                      Focused implementation guides
 CHAIN.md                   Current chain state and verified stages
-BUILD-AND-DEPLOY.md        Device build/deploy notes
-using-repl.md              REPL and HTTP API usage
-ARCHITECTURE.md            System design and execution model
+docs/BUILD-AND-DEPLOY.md   Device build/deploy notes
+docs/USING-REPL.md         REPL and HTTP API usage
+docs/ARCHITECTURE.md       System design and execution model
 ```
 
 ## Quick Start
@@ -147,7 +182,7 @@ xcodebuild -project DarkForge.xcodeproj -scheme DarkForge \
 ```
 
 For normal signed device builds and deployment notes, see
-[`BUILD-AND-DEPLOY.md`](./BUILD-AND-DEPLOY.md).
+[`docs/BUILD-AND-DEPLOY.md`](./docs/BUILD-AND-DEPLOY.md).
 
 ### 5. Start The Host Server
 
@@ -182,7 +217,7 @@ Use the host server for:
 - `/api/fs` and `/api/fs/download` for filesystem workflows
 
 The detailed request shapes and examples are in
-[`using-repl.md`](./using-repl.md).
+[`docs/USING-REPL.md`](./docs/USING-REPL.md).
 
 ### Skills
 
@@ -194,18 +229,19 @@ They can be:
 - run interactively or queued as jobs
 
 To create a shared repo, see [`docs/REPO.md`](./docs/REPO.md).
-To add a new skill, see [`docs/creating-skills.md`](./docs/creating-skills.md).
+To add a new skill, see [`docs/CREATING-SKILLS.md`](./docs/CREATING-SKILLS.md).
 
 ## Important Documents
 
-- [`ARCHITECTURE.md`](./ARCHITECTURE.md): system structure, execution model,
+- [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md): system structure, execution model,
   data flow, and trust boundaries
-- [`BUILD-AND-DEPLOY.md`](./BUILD-AND-DEPLOY.md): build and install workflow
-- [`USING-REPL.md`](./using-repl.md): REPL usage and HTTP API examples
-- [`docs/jsc-bridge-development-guide.md`](./docs/jsc-bridge-development-guide.md):
+- [`docs/BUILD-AND-DEPLOY.md`](./docs/BUILD-AND-DEPLOY.md): build and install
+  workflow
+- [`docs/USING-REPL.md`](./docs/USING-REPL.md): REPL usage and HTTP API examples
+- [`docs/JSC-BRIDGE-DEVELOPMENT-GUIDE.md`](./docs/JSC-BRIDGE-DEVELOPMENT-GUIDE.md):
   bridge-specific pitfalls and invariants
 - [`docs/REPO.md`](./docs/REPO.md): repo structure for shared skills and libraries
-- [`docs/creating-skills.md`](./docs/creating-skills.md): skill authoring guide
+- [`docs/CREATING-SKILLS.md`](./docs/CREATING-SKILLS.md): skill authoring guide
 
 ## Design Goals
 

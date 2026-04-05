@@ -157,6 +157,13 @@ Users can add a repo from:
 - `https://github.com/<owner>/<repo>`
 - `https://github.com/<owner>/<repo>/tree/<ref>/<path>`
 - `<owner>/<repo>@<ref>`
+- `file:///absolute/path/to/repo`
+- `/absolute/path/to/repo`
+- `./relative/path/to/repo`
 
-DarkForge resolves the requested ref to a commit SHA and records that commit in
-the installed repo metadata.
+For GitHub sources, DarkForge resolves the requested ref to a commit SHA and
+records that commit in the installed repo metadata.
+
+For local repo testing, point DarkForge at a local directory that already
+contains `darkforge-package.json`. Re-adding or updating that repo will refresh
+the installed copy from local disk.

@@ -437,21 +437,11 @@ function renderSkillGrid() {
 
     const tags = document.createElement("div");
     tags.className = "skill-card-tags";
-    const runtimeTag = document.createElement("span");
-    runtimeTag.className = "tag";
-    runtimeTag.textContent = skill.runtime === "jscbridge" ? "JSCBridge" : skill.runtime;
-    tags.append(runtimeTag);
     if (skill.sourceType) {
       const sourceTag = document.createElement("span");
       sourceTag.className = "tag tag-muted";
       sourceTag.textContent = skill.sourceType === "linked" ? `Linked${skill.packageName ? ` · ${skill.packageName}` : ""}` : (skill.sourceType === "local" ? "Local" : "Built-in");
       tags.append(sourceTag);
-    }
-    if (skill.executionMode === "job") {
-      const modeTag = document.createElement("span");
-      modeTag.className = "tag tag-warm";
-      modeTag.textContent = "Detached Job";
-      tags.append(modeTag);
     }
     if (skill.inputCount > 0) {
       const inputTag = document.createElement("span");
@@ -478,7 +468,11 @@ function renderSkillGrid() {
     });
     footer.append(runBtn);
 
-    card.append(header, summary, tags, footer);
+    if (tags.childElementCount > 0) {
+      card.append(header, summary, tags, footer);
+    } else {
+      card.append(header, summary, footer);
+    }
     card.addEventListener("click", () => openSkillInEditor(skill.id));
     els.skillGrid.append(card);
   }
@@ -797,7 +791,11 @@ function renderPackageManager() {
 
     const meta = document.createElement("div");
     meta.className = "package-item-meta";
-    meta.textContent = `${pkg.repoUrl} @ ${pkg.sourceRef}${pkg.resolvedCommit ? ` (${pkg.resolvedCommit.slice(0, 12)})` : ""}`;
+    if (pkg.sourceKind === "local") {
+      meta.textContent = `${pkg.sourcePath}${pkg.sourceHash ? ` (${pkg.sourceHash.slice(0, 12)})` : ""}`;
+    } else {
+      meta.textContent = `${pkg.repoUrl} @ ${pkg.sourceRef}${pkg.resolvedCommit ? ` (${pkg.resolvedCommit.slice(0, 12)})` : ""}`;
+    }
 
     const summary = document.createElement("p");
     summary.className = "package-item-summary";
@@ -877,13 +875,18 @@ async function refreshPackagesAndLibraries() {
 async function previewPackageSource() {
   const source = els.packageSourceInput.value.trim();
   if (!source) {
-    showToast("Enter a GitHub repo source first.", "error");
+    showToast("Enter a repo URL or local path first.", "error");
     return null;
   }
-  const preview = await requestJson("/api/package-import/preview", {
+  return requestJson("/api/package-import/preview", {
     method: "POST",
     body: JSON.stringify({ source }),
   });
+}
+
+async function showPackagePreview() {
+  const preview = await previewPackageSource();
+  if (!preview) return null;
   ensureConsoleOpen("result");
   writeResult(JSON.stringify(preview, null, 2));
   showToast(`Previewed repo "${preview.package.name}"`, "info");
@@ -891,13 +894,18 @@ async function previewPackageSource() {
 }
 
 async function installPackageSource() {
+  const source = els.packageSourceInput.value.trim();
+  if (!source) {
+    showToast("Enter a repo URL or local path first.", "error");
+    return;
+  }
   const preview = await previewPackageSource();
   if (!preview) return;
-  const ok = window.confirm(`Add repo "${preview.package.name}" from ${preview.source.repoUrl} @ ${preview.source.resolvedCommit.slice(0, 12)}?`);
-  if (!ok) return;
+  ensureConsoleOpen("result");
+  writeResult(JSON.stringify(preview, null, 2));
   const result = await requestJson("/api/package-import/install", {
     method: "POST",
-    body: JSON.stringify({ source: els.packageSourceInput.value.trim() }),
+    body: JSON.stringify({ source }),
   });
   showToast(`Added repo "${result.package.name}"`, "success");
   await Promise.all([refreshSkills(), refreshPackagesAndLibraries()]);
@@ -908,6 +916,10 @@ async function checkPackageUpdate(packageId) {
     method: "POST",
     body: JSON.stringify({}),
   });
+  if (result.sourceKind === "local") {
+    showToast(result.hasUpdate ? `Local changes detected for ${packageId}` : `${packageId} matches the local repo`, result.hasUpdate ? "info" : "success");
+    return;
+  }
   showToast(result.hasUpdate ? `Update available for ${packageId}` : `${packageId} is current`, result.hasUpdate ? "info" : "success");
 }
 
@@ -1273,7 +1285,7 @@ async function init() {
   els.managePackagesButton.addEventListener("click", () => openModal(els.packageModal));
   els.previewPackageButton.addEventListener("click", async () => {
     try {
-      await previewPackageSource();
+      await showPackagePreview();
     } catch (error) {
       showToast(error.message, "error");
     }

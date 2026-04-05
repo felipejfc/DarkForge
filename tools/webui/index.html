@@ -248,7 +248,7 @@
 
   <!-- Run Inputs Modal -->
   <div id="runModal" class="modal-overlay" hidden>
-    <div class="modal">
+    <div class="modal modal-wide modal-run">
       <div class="modal-header">
         <h2 id="runModalTitle">Run Skill</h2>
         <button class="modal-close" data-dismiss="runModal" type="button">&times;</button>
@@ -323,10 +323,10 @@
       </div>
       <div class="modal-body">
         <label class="field">
-          <span>GitHub Repo Source</span>
-          <input id="packageSourceInput" type="text" placeholder="https://github.com/owner/repo/tree/main/path">
+          <span>Repo Source</span>
+          <input id="packageSourceInput" type="text" placeholder="https://github.com/owner/repo/tree/main/path or /path/to/repo">
         </label>
-        <div class="field-help">Public GitHub repos only in v1. DarkForge resolves and pins the install to a commit SHA.</div>
+        <div class="field-help">Use a public GitHub repo URL, `owner/repo@ref`, `file://...`, or a local repo path that contains `darkforge-package.json`.</div>
         <div class="modal-inline-actions">
           <button id="previewPackageButton" class="btn btn-ghost btn-sm" type="button">Preview Repo</button>
           <button id="installPackageButton" class="btn btn-primary btn-sm" type="button">Add Repo</button>

@@ -113,10 +113,10 @@ class PackageManagerTests(unittest.TestCase):
             "enabledByDefault": True,
             "apiReference": [
                 {
-                    "name": "require(\"sample-package/util\")",
-                    "signature": "const util = require(\"sample-package/util\")",
+                    "name": "util.enabled",
+                    "signature": "util.enabled",
                     "category": "Libraries",
-                    "description": "Load sample util",
+                    "description": "Read the enabled marker from the sample util module",
                     "snippet": "const util = require(\"sample-package/util\");",
                 }
             ],
@@ -149,6 +149,92 @@ class PackageManagerTests(unittest.TestCase):
         self.assertFalse(updated["enabled"])
         stored = json.loads((package_dir / "package-install.json").read_text(encoding="utf-8"))
         self.assertFalse(stored["libraryState"]["sample-package/util"])
+
+    def test_preview_and_install_local_repo_source(self) -> None:
+        repo_root = self.root / "local-repo"
+        (repo_root / "skills").mkdir(parents=True)
+        (repo_root / "libraries").mkdir(parents=True)
+        (repo_root / "darkforge-package.json").write_text(json.dumps({
+            "schemaVersion": 1,
+            "package": {
+                "id": "local-repo",
+                "name": "Local Repo",
+                "summary": "local package",
+                "author": "tester",
+                "homepage": ""
+            },
+            "skills": [
+                {"id": "hello", "manifestPath": "skills/hello.json"}
+            ],
+            "libraries": [
+                {"id": "zip", "manifestPath": "libraries/zip.json"}
+            ]
+        }, indent=2) + "\n", encoding="utf-8")
+        (repo_root / "skills" / "hello.json").write_text(json.dumps({
+            "id": "hello",
+            "name": "Hello",
+            "summary": "local skill",
+            "runtime": "jscbridge",
+            "executionMode": "interactive",
+            "entryFile": "hello.js",
+            "libraryDependencies": ["local-repo/zip"],
+            "inputs": []
+        }, indent=2) + "\n", encoding="utf-8")
+        (repo_root / "skills" / "hello.js").write_text("log('hello');\n", encoding="utf-8")
+        (repo_root / "libraries" / "zip.json").write_text(json.dumps({
+            "id": "zip",
+            "name": "ZIP",
+            "summary": "local zip",
+            "entryFile": "zip.js",
+            "moduleId": "local-repo/zip",
+            "exposureMode": "module",
+            "enabledByDefault": True,
+            "apiReference": [
+                {
+                    "name": "zip.enabled",
+                    "signature": "zip.enabled",
+                    "category": "Libraries",
+                    "description": "Read the local zip module marker",
+                    "snippet": "const zip = require(\"local-repo/zip\");",
+                }
+            ],
+        }, indent=2) + "\n", encoding="utf-8")
+        (repo_root / "libraries" / "zip.js").write_text("module.exports = { enabled: true };\n", encoding="utf-8")
+
+        preview = self.manager.preview_package(str(repo_root))
+        installed = self.manager.install_package(str(repo_root))
+        packages = self.manager.list_packages()
+        update = self.manager.check_package_update("local-repo")
+
+        self.assertEqual(preview["source"]["sourceKind"], "local")
+        self.assertEqual(preview["source"]["sourcePath"], str(repo_root.resolve()))
+        self.assertEqual(installed["source"]["sourceKind"], "local")
+        self.assertEqual(packages[0]["sourceKind"], "local")
+        self.assertFalse(update["hasUpdate"])
+
+    def test_api_reference_rejects_require_rows(self) -> None:
+        (self.builtin_libraries / "bad.js").write_text("module.exports = {};\n", encoding="utf-8")
+        (self.builtin_libraries / "bad.json").write_text(json.dumps({
+            "id": "bad",
+            "name": "Bad Library",
+            "summary": "invalid docs",
+            "entryFile": "bad.js",
+            "moduleId": "bad/library",
+            "exposureMode": "module",
+            "enabledByDefault": True,
+            "apiReference": [
+                {
+                    "name": "require(\"bad/library\")",
+                    "signature": "const bad = require(\"bad/library\")",
+                    "category": "Libraries",
+                    "description": "invalid import row",
+                    "snippet": "const bad = require(\"bad/library\");",
+                }
+            ],
+        }, indent=2) + "\n", encoding="utf-8")
+
+        libraries = self.manager.list_libraries()
+        self.assertEqual(libraries, [])
 
 
 if __name__ == "__main__":

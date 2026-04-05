@@ -69,3 +69,4 @@ venv/
 # Tooling / OS metadata
 .claude/
 .DS_Store
+/.local-repos/

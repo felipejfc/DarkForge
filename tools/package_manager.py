@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, unquote, urlparse
 from urllib.request import Request, urlopen
 
 
@@ -145,6 +145,8 @@ def _normalize_api_reference(raw_entries: Any) -> list[dict[str, str]]:
         category = str(raw.get("category") or "Libraries").strip() or "Libraries"
         if not name or not signature or not description or not snippet:
             raise PackageError("apiReference entries require name, signature, description, and snippet")
+        if "require(" in name or "require(" in signature:
+            raise PackageError("apiReference names and signatures must describe public methods, not require() statements")
         entries.append({
             "name": name,
             "signature": signature,
@@ -313,6 +315,93 @@ class GithubPackageFetcher:
             return json.loads(self.fetch_text(relative_path))
         except json.JSONDecodeError as error:
             raise PackageError(f"Invalid JSON file: {relative_path}") from error
+
+
+class LocalPackageFetcher:
+    def __init__(self, source: str):
+        self.source = str(source or "").strip()
+        if not self.source:
+            raise PackageError("Package source must not be empty")
+        self.source_kind = "local"
+        self.root_dir = self._resolve_root(self.source)
+        self.repo_url = ""
+        self.ref = "local"
+        self.subpath = ""
+        self.source_path = str(self.root_dir)
+
+    @staticmethod
+    def _resolve_root(source: str) -> Path:
+        if source.startswith("file://"):
+            parsed = urlparse(source)
+            candidate = Path(unquote(parsed.path)).expanduser()
+        else:
+            candidate = Path(source).expanduser()
+        candidate = candidate.resolve()
+        if candidate.is_file():
+            if candidate.name != PACKAGE_INDEX_NAME:
+                raise PackageError(f"Local package source must be a directory or {PACKAGE_INDEX_NAME}")
+            candidate = candidate.parent
+        if not candidate.exists():
+            raise PackageError(f"Local package path not found: {candidate}")
+        if not candidate.is_dir():
+            raise PackageError(f"Local package source must be a directory: {candidate}")
+        index_path = candidate / PACKAGE_INDEX_NAME
+        if not index_path.is_file():
+            raise PackageError(f"Local package root is missing {PACKAGE_INDEX_NAME}: {candidate}")
+        return candidate
+
+    def resolve_commit(self) -> str:
+        return ""
+
+    def fetch_bytes(self, relative_path: str) -> bytes:
+        normalized = _normalize_rel_path(relative_path)
+        target = (self.root_dir / normalized).resolve()
+        if not target.is_relative_to(self.root_dir):
+            raise PackageError(f"Path escaped local package root: {relative_path}")
+        if not target.exists() or not target.is_file():
+            raise PackageError(f"Local package file not found: {normalized}")
+        return target.read_bytes()
+
+    def fetch_text(self, relative_path: str) -> str:
+        try:
+            return self.fetch_bytes(relative_path).decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise PackageError(f"Package file must be UTF-8 text: {relative_path}") from error
+
+    def fetch_json_file(self, relative_path: str) -> dict[str, Any]:
+        try:
+            return json.loads(self.fetch_text(relative_path))
+        except json.JSONDecodeError as error:
+            raise PackageError(f"Invalid JSON file: {relative_path}") from error
+
+
+def _looks_like_local_source(source: str) -> bool:
+    if source.startswith("file://"):
+        return True
+    if source.startswith(("/", "./", "../", "~")):
+        return True
+    try:
+        candidate = Path(source).expanduser()
+    except Exception:
+        return False
+    return candidate.exists()
+
+
+def _make_fetcher(source: str) -> GithubPackageFetcher | LocalPackageFetcher:
+    normalized = str(source or "").strip()
+    if _looks_like_local_source(normalized):
+        return LocalPackageFetcher(normalized)
+    return GithubPackageFetcher(normalized)
+
+
+def _hash_preview_files(files: dict[str, str]) -> str:
+    digest = hashlib.sha1()
+    for rel_path in sorted(files):
+        digest.update(rel_path.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(files[rel_path].encode("utf-8"))
+        digest.update(b"\0")
+    return digest.hexdigest()
 
 
 class PackageManager:
@@ -605,6 +694,7 @@ class PackageManager:
             install_meta = self._read_package_install(package_dir)
             if not install_meta:
                 continue
+            source_meta = install_meta["source"]
             packages.append({
                 "id": install_meta["package"]["id"],
                 "name": install_meta["package"]["name"],
@@ -612,10 +702,13 @@ class PackageManager:
                 "author": install_meta["package"].get("author", ""),
                 "homepage": install_meta["package"].get("homepage", ""),
                 "sourceType": "linked",
-                "repoUrl": install_meta["source"]["repoUrl"],
-                "sourceRef": install_meta["source"]["ref"],
-                "resolvedCommit": install_meta["source"]["resolvedCommit"],
-                "subpath": install_meta["source"].get("subpath", ""),
+                "sourceKind": source_meta.get("sourceKind", "github"),
+                "repoUrl": source_meta["repoUrl"],
+                "sourceRef": source_meta["ref"],
+                "resolvedCommit": source_meta["resolvedCommit"],
+                "subpath": source_meta.get("subpath", ""),
+                "sourcePath": source_meta.get("sourcePath", ""),
+                "sourceHash": source_meta.get("sourceHash", ""),
                 "installedAt": install_meta.get("installedAt"),
                 "updatedAt": install_meta.get("updatedAt"),
                 "skillCount": len(install_meta.get("skills", [])),
@@ -672,16 +765,19 @@ class PackageManager:
         raise FileNotFoundError(module_id)
 
     def preview_package(self, source: str) -> dict[str, Any]:
-        fetcher = GithubPackageFetcher(source)
+        fetcher = _make_fetcher(source)
         index = fetcher.fetch_json_file(PACKAGE_INDEX_NAME)
         package_payload = self._normalize_package_index(index)
         package_id = package_payload["id"]
         package_name = package_payload["name"]
+        resolved_commit = fetcher.resolve_commit()
         provenance = {
+            "sourceKind": getattr(fetcher, "source_kind", "github"),
             "repoUrl": fetcher.repo_url,
             "sourceRef": fetcher.ref,
-            "resolvedCommit": fetcher.resolve_commit(),
+            "resolvedCommit": resolved_commit,
             "subpath": fetcher.subpath,
+            "sourcePath": getattr(fetcher, "source_path", ""),
         }
         package_meta = {
             "id": package_id,
@@ -732,10 +828,13 @@ class PackageManager:
         return {
             "package": package_payload,
             "source": {
+                "sourceKind": getattr(fetcher, "source_kind", "github"),
                 "repoUrl": fetcher.repo_url,
                 "ref": fetcher.ref,
-                "resolvedCommit": fetcher.resolve_commit(),
+                "resolvedCommit": resolved_commit,
                 "subpath": fetcher.subpath,
+                "sourcePath": getattr(fetcher, "source_path", ""),
+                "sourceHash": _hash_preview_files(files_to_write),
             },
             "skills": preview_skills,
             "libraries": preview_libraries,
@@ -762,10 +861,13 @@ class PackageManager:
         install_meta = {
             "package": preview["package"],
             "source": {
+                "sourceKind": preview["source"].get("sourceKind", "github"),
                 "repoUrl": preview["source"]["repoUrl"],
                 "ref": preview["source"]["ref"],
                 "resolvedCommit": preview["source"]["resolvedCommit"],
                 "subpath": preview["source"]["subpath"],
+                "sourcePath": preview["source"].get("sourcePath", ""),
+                "sourceHash": preview["source"].get("sourceHash", ""),
             },
             "skills": preview["package"]["skills"],
             "libraries": preview["package"]["libraries"],
@@ -790,13 +892,28 @@ class PackageManager:
         install_meta = self._read_package_install(package_dir)
         if not install_meta:
             raise FileNotFoundError(package_id)
-        fetcher = GithubPackageFetcher(self._rebuild_source_url(install_meta["source"]))
+        source_meta = install_meta["source"]
+        source_ref = self._rebuild_source_url(source_meta)
+        if source_meta.get("sourceKind") == "local":
+            preview = self.preview_package(source_ref)
+            latest_hash = str(preview["source"].get("sourceHash") or "")
+            current_hash = str(source_meta.get("sourceHash") or "")
+            return {
+                "packageId": install_meta["package"]["id"],
+                "sourceKind": "local",
+                "sourcePath": source_meta.get("sourcePath", ""),
+                "currentHash": current_hash,
+                "latestHash": latest_hash,
+                "hasUpdate": bool(current_hash and latest_hash and current_hash != latest_hash),
+            }
+        fetcher = GithubPackageFetcher(source_ref)
         latest_commit = fetcher.resolve_commit()
-        current_commit = str(install_meta["source"].get("resolvedCommit") or "")
+        current_commit = str(source_meta.get("resolvedCommit") or "")
         return {
             "packageId": install_meta["package"]["id"],
-            "repoUrl": install_meta["source"]["repoUrl"],
-            "sourceRef": install_meta["source"]["ref"],
+            "sourceKind": "github",
+            "repoUrl": source_meta["repoUrl"],
+            "sourceRef": source_meta["ref"],
             "currentCommit": current_commit,
             "latestCommit": latest_commit,
             "hasUpdate": bool(current_commit and latest_commit and current_commit != latest_commit),
@@ -1089,10 +1206,12 @@ class PackageManager:
             "id": install_meta["package"]["id"],
             "name": install_meta["package"]["name"],
             "provenance": {
+                "sourceKind": install_meta["source"].get("sourceKind", "github"),
                 "repoUrl": install_meta["source"]["repoUrl"],
                 "sourceRef": install_meta["source"]["ref"],
                 "resolvedCommit": install_meta["source"]["resolvedCommit"],
                 "subpath": install_meta["source"].get("subpath", ""),
+                "sourcePath": install_meta["source"].get("sourcePath", ""),
             },
         }
 
@@ -1111,6 +1230,8 @@ class PackageManager:
 
     @staticmethod
     def _rebuild_source_url(source: dict[str, Any]) -> str:
+        if source.get("sourceKind") == "local":
+            return str(source.get("sourcePath") or "")
         repo_url = str(source.get("repoUrl") or "").rstrip("/")
         ref = str(source.get("ref") or "HEAD").strip() or "HEAD"
         subpath = _normalize_rel_path(source.get("subpath"), allow_empty=True)
