@@ -53,6 +53,9 @@ For a new target, produce:
 4. Treat proc/proc_ro and thread/thread_ro semantics as unstable until proven.
 5. `pacizaGadget` is outside the kernelcache path; recover it from the dyld
    shared cache, not from the kernelcache.
+6. For dyld shared-cache helpers, remember that the stored address is usually
+   unslid. You still need a runtime shared-cache slide anchor, and `objc_msgSend`
+   is a reliable one when you know the correct unslid value for the target.
 
 ## Symbolication
 
@@ -64,6 +67,15 @@ That path intentionally mirrors the logic from `ipsw`'s IDA
 
 If you want to inspect the upstream implementation, a vendored copy may exist
 under the target's `.opcodex/.../plugins/ida/symbolicate.py`.
+
+For dyld shared-cache targets like `pacizaGadget`, the runtime address is:
+
+`runtime_target = unslid_target + (runtime_objc_msgSend - unslid_objc_msgSend)`
+
+Known unslid `objc_msgSend` anchors from local study:
+
+- iPhone 22G86: `0x180109c00`
+- iPad 22D82: `0x180103c00`
 
 For a fresh IPSW already added to `./ipsw`, the minimal workflow is:
 

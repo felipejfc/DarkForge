@@ -366,8 +366,63 @@ These are medium-confidence, not weak:
 - Not a kernelcache field.
 - Recover it from the dyld shared cache.
 - Best clue:
-  find a stable `paciza x0; ret` or a `signPointer`-style helper and record its
-  unslid address.
+  prefer dyld's `mach_o::ChainedFixupPointerOnDisk::Arm64e::signPointer`
+  helper over hunting a random `paciza x0; ret`.
+- Runtime note:
+  this address is unslid. If the app resolves the live address by shared-cache
+  slide, it needs a correct unslid anchor from the same cache mapping.
+  `objc_msgSend` is a practical anchor:
+  - iPhone 22G86 `/usr/lib/libobjc.A.dylib`: `0x180109c00`
+  - iPad 22D82 `/usr/lib/libobjc.A.dylib`: `0x180103c00`
+- iPhone 22G86 concrete symbol:
+  `/usr/lib/dyld` at unslid address `0x1a962b0a4`
+  resolves to
+  `__ZN6mach_o25ChainedFixupPointerOnDisk6Arm64e11signPointerEyPvbth`.
+- iPhone 22G86 concrete disassembly shape:
+  `cbz x0, ret`
+  `mov w8, w3`
+  `bfi x1, x8, #0x30, #0x10`
+  `cmp w2, #0`
+  `csel x16, x8, x1, eq`
+  then a 4-way key switch on `w4`:
+  `0 -> pacia1716`
+  `1 -> pacib1716`
+  `2 -> pacda x17, x16`
+  `3 -> pacdb x17, x16`
+  followed by `mov x0, x17; ret`.
+- Why this is a good pattern:
+  it is semantically stronger than a naked PAC gadget. It is a real signing
+  routine that takes a pointer, blends/chooses the discriminator, selects the
+  PAC key family, signs into `x17`, and returns it in `x0`.
+- How to search on a new target:
+  1. Search the dyld shared cache for the mangled symbol above in `/usr/lib/dyld`.
+  2. If symbols are missing, search for the instruction motif:
+     `bfi x1, x8, #0x30, #0x10`
+     followed closely by
+     `csel x16, x8, x1, eq`
+     and then the four PAC alternatives
+     `pacia1716`, `pacib1716`, `pacda`, `pacdb`.
+  3. Confirm the function ends with `mov x0, x17; ret`.
+  4. Cross-check against callers or wrappers that select PAC mode `0/1/2/3`.
+- iPad status:
+  found directly in the local iPad 22D82 cache at unslid address
+  `0x1a8e71b74` in `/usr/lib/dyld`.
+- iPad 22D82 disassembly shape:
+  same high-level logic, but implemented with a jump table:
+  `cbz x0, ret`
+  `mov w8, w3`
+  `bfi x1, x8, #0x30, #0x10`
+  `cmp w2, #0`
+  `csel x8, x8, x1, eq`
+  `cmp w4, #0x3`
+  `b.hi cold`
+  then jump-table dispatch to blocks ending in
+  `pacia1716`, `pacda`, `pacib1716`, `pacdb`
+  followed by `mov x0, x17; ret`.
+- iPad wrapper:
+  `0x1a8ec78d4` is the two-argument const-method wrapper
+  `mach_o::ChainedFixupPointerOnDisk::Arm64e::signPointer(void*, unsigned long long) const`
+  that unpacks bitfields and tail-branches into the five-argument helper above.
 
 ## Current Conflicts And Weak Spots
 
