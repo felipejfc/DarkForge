@@ -28,7 +28,7 @@
 		891443F2086F2E55608ADB73 /* KernelRW.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE589C63B307843932C7E944 /* KernelRW.swift */; };
 		8DD7A4EA47E63E177463079B /* CoreServices.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1534C4A0751C74F6C165758B /* CoreServices.framework */; };
 		9FCD0145F2C35D4D903833F2 /* VMShmem.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE1E731881539E66FB20537C /* VMShmem.swift */; };
-		A051C5E2B333609021DCD25C /* PACUtils.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10265119F06961EF011BFB6 /* PACUtils.swift */; };
+		A0C55F1B1C9A4E6FAAA10001 /* RemoteCallSigner.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0C55F1B1C9A4E6FAAA10002 /* RemoteCallSigner.swift */; };
 		A18D3FD43EBB958E8AAF4822 /* KernelDiscovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E30A58F60D46809BBA2A956 /* KernelDiscovery.swift */; };
 		A89C3B3E2F6F311C258C97F3 /* PCBCorruption.swift in Sources */ = {isa = PBXBuildFile; fileRef = 385779BFF53170F8E962BC91 /* PCBCorruption.swift */; };
 		A9A3AB412C44766F7D594B7D /* SandboxEscape.swift in Sources */ = {isa = PBXBuildFile; fileRef = 220EEA44CAEF0682925A8B10 /* SandboxEscape.swift */; };
@@ -75,7 +75,7 @@
 		8A1219AC1CB60EF93DD17040 /* PrivilegeEscalation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivilegeEscalation.swift; sourceTree = "<group>"; };
 		9B6A4D84E5A84BE6A51AB858 /* skills */ = {isa = PBXFileReference; lastKnownFileType = folder; path = skills; sourceTree = "<group>"; };
 		9CC332E64E6C91C1CDF878FF /* JSCBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSCBridge.swift; sourceTree = "<group>"; };
-		A10265119F06961EF011BFB6 /* PACUtils.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PACUtils.swift; sourceTree = "<group>"; };
+		A0C55F1B1C9A4E6FAAA10002 /* RemoteCallSigner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteCallSigner.swift; sourceTree = "<group>"; };
 		A9A063E2D30243B8E9913F19 /* PhysTranslation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhysTranslation.swift; sourceTree = "<group>"; };
 		B65215AAA6FC7630F8C702F8 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		BE589C63B307843932C7E944 /* KernelRW.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KernelRW.swift; sourceTree = "<group>"; };
@@ -182,7 +182,6 @@
 				5832E05D560D3644AF20CC13 /* KExploit.swift */,
 				2343222A184BFD61C348445A /* LaunchdInjection.swift */,
 				2FB661735B5D8CA11D89DCB3 /* Offsets.swift */,
-				A10265119F06961EF011BFB6 /* PACUtils.swift */,
 				385779BFF53170F8E962BC91 /* PCBCorruption.swift */,
 				735F0C79CFB6671E34F368EC /* PhysicalMemory.swift */,
 				A9A063E2D30243B8E9913F19 /* PhysTranslation.swift */,
@@ -190,6 +189,7 @@
 				8A1219AC1CB60EF93DD17040 /* PrivilegeEscalation.swift */,
 				4B9756DE42A4ABFF2EB87D6D /* RaceCondition.swift */,
 				2F45B18A554FD8FB390F7A23 /* RemoteCall.swift */,
+				A0C55F1B1C9A4E6FAAA10002 /* RemoteCallSigner.swift */,
 				220EEA44CAEF0682925A8B10 /* SandboxEscape.swift */,
 				352F960A97833D782B248896 /* SocketSpray.swift */,
 				FE1E731881539E66FB20537C /* VMShmem.swift */,
@@ -291,7 +291,6 @@
 				891443F2086F2E55608ADB73 /* KernelRW.swift in Sources */,
 				51A5A0F63318492A959E49AD /* LaunchdInjection.swift in Sources */,
 				F102EE62158F38DFFCA0F408 /* Offsets.swift in Sources */,
-				A051C5E2B333609021DCD25C /* PACUtils.swift in Sources */,
 				A89C3B3E2F6F311C258C97F3 /* PCBCorruption.swift in Sources */,
 				BB65BB368D8FFE3F7A05D432 /* PhysTranslation.swift in Sources */,
 				CD8DB4AF29E8BEC385AD0929 /* PhysicalMemory.swift in Sources */,
@@ -299,6 +298,7 @@
 				7F42F82A6EE19FD3D30EB508 /* PrivilegeEscalation.swift in Sources */,
 				30FBEF6FE29BCCD202C48727 /* RaceCondition.swift in Sources */,
 				8833422A985DB31ED3B059F5 /* RemoteCall.swift in Sources */,
+				A0C55F1B1C9A4E6FAAA10001 /* RemoteCallSigner.swift in Sources */,
 				A9A3AB412C44766F7D594B7D /* SandboxEscape.swift in Sources */,
 				C47651892B019CC3E27F6F87 /* SceneDelegate.swift in Sources */,
 				09F7B0FED2F6640D3AA8021C /* SkillsViewController.swift in Sources */,
