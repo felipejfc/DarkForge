@@ -1,12 +1,13 @@
 use std::fs;
 use std::net::TcpStream;
 use std::path::PathBuf;
+use std::process::Command as StdCommand;
 use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Manager, RunEvent, State};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
@@ -27,6 +28,7 @@ struct ServerInner {
     config: ServerConfig,
     active_config: ServerConfig,
     child: Option<CommandChild>,
+    child_pid: Option<u32>,
     launch_id: u64,
     starting: bool,
     running: bool,
@@ -110,6 +112,173 @@ fn wait_for_port_to_close(host: &str, port: u16, timeout: Duration) {
             return;
         }
         thread::sleep(POLL_INTERVAL);
+    }
+}
+
+fn bundled_sidecar_path() -> Option<PathBuf> {
+    std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(|dir| dir.join("kserver")))
+}
+
+#[cfg(unix)]
+fn process_command(pid: u32) -> Option<String> {
+    let output = StdCommand::new("ps")
+        .args(["-o", "command=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let command = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if command.is_empty() {
+        None
+    } else {
+        Some(command)
+    }
+}
+
+#[cfg(not(unix))]
+fn process_command(_pid: u32) -> Option<String> {
+    None
+}
+
+#[cfg(unix)]
+fn child_pids(pid: u32) -> Vec<u32> {
+    let output = match StdCommand::new("pgrep")
+        .args(["-P", &pid.to_string()])
+        .output()
+    {
+        Ok(output) if output.status.success() => output,
+        _ => return Vec::new(),
+    };
+
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.trim().parse::<u32>().ok())
+        .collect()
+}
+
+#[cfg(not(unix))]
+fn child_pids(_pid: u32) -> Vec<u32> {
+    Vec::new()
+}
+
+#[cfg(unix)]
+fn descendant_pids(pid: u32) -> Vec<u32> {
+    let mut descendants = Vec::new();
+    for child_pid in child_pids(pid) {
+        descendants.push(child_pid);
+        descendants.extend(descendant_pids(child_pid));
+    }
+    descendants
+}
+
+#[cfg(not(unix))]
+fn descendant_pids(_pid: u32) -> Vec<u32> {
+    Vec::new()
+}
+
+#[cfg(unix)]
+fn send_signal(pid: u32, signal: &str) {
+    let _ = StdCommand::new("kill")
+        .args([signal, &pid.to_string()])
+        .status();
+}
+
+#[cfg(unix)]
+fn terminate_pid_tree(pid: u32) {
+    let mut pids = descendant_pids(pid);
+    pids.sort_unstable();
+    pids.dedup();
+    for child_pid in pids.into_iter().rev() {
+        send_signal(child_pid, "-TERM");
+    }
+    send_signal(pid, "-TERM");
+}
+
+#[cfg(not(unix))]
+fn terminate_pid_tree(_pid: u32) {}
+
+#[cfg(unix)]
+fn force_terminate_pid_tree(pid: u32) {
+    let mut pids = descendant_pids(pid);
+    pids.sort_unstable();
+    pids.dedup();
+    for child_pid in pids.into_iter().rev() {
+        send_signal(child_pid, "-KILL");
+    }
+    send_signal(pid, "-KILL");
+}
+
+#[cfg(not(unix))]
+fn force_terminate_pid_tree(_pid: u32) {}
+
+fn is_bundled_sidecar_process(pid: u32) -> bool {
+    let expected = match bundled_sidecar_path() {
+        Some(path) => path,
+        None => return false,
+    };
+    let expected = expected.to_string_lossy();
+    process_command(pid)
+        .map(|command| command.starts_with(expected.as_ref()))
+        .unwrap_or(false)
+}
+
+#[cfg(unix)]
+fn listener_pid(port: u16) -> Option<u32> {
+    let output = StdCommand::new("lsof")
+        .args(["-tiTCP", &port.to_string(), "-sTCP:LISTEN"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find_map(|line| line.trim().parse::<u32>().ok())
+}
+
+#[cfg(not(unix))]
+fn listener_pid(_port: u16) -> Option<u32> {
+    None
+}
+
+#[cfg(unix)]
+fn terminate_stale_bundled_sidecar(port: u16) -> bool {
+    let Some(pid) = listener_pid(port) else {
+        return false;
+    };
+    if !is_bundled_sidecar_process(pid) {
+        return false;
+    }
+    terminate_pid_tree(pid);
+    thread::sleep(Duration::from_millis(200));
+    force_terminate_pid_tree(pid);
+    true
+}
+
+#[cfg(not(unix))]
+fn terminate_stale_bundled_sidecar(_port: u16) -> bool {
+    false
+}
+
+fn stop_managed_server(app: &AppHandle) {
+    let (maybe_child, child_pid) = {
+        let state = app.state::<ServerState>();
+        let mut inner = state.inner.lock().unwrap();
+        inner.starting = false;
+        inner.running = false;
+        inner.managed_child = false;
+        (inner.child.take(), inner.child_pid.take())
+    };
+    if let Some(child) = maybe_child {
+        let _ = child.kill();
+    }
+    if let Some(pid) = child_pid {
+        terminate_pid_tree(pid);
+        thread::sleep(Duration::from_millis(200));
+        force_terminate_pid_tree(pid);
     }
 }
 
@@ -207,7 +376,8 @@ fn spawn_sidecar(
         .shell()
         .sidecar("kserver")
         .map_err(|e| format!("failed to resolve kserver sidecar: {e}"))?
-        .args(config.sidecar_args());
+        .args(config.sidecar_args())
+        .env("DARKFORGE_EXIT_WHEN_ORPHANED", "1");
     let (mut rx, child) = sidecar
         .spawn()
         .map_err(|e| format!("failed to spawn kserver: {e}"))?;
@@ -229,6 +399,7 @@ fn spawn_sidecar(
                     };
                     update_if_current(&app_clone, launch_id, |inner| {
                         inner.child = None;
+                        inner.child_pid = None;
                         inner.starting = false;
                         inner.running = false;
                         inner.managed_child = false;
@@ -289,7 +460,7 @@ fn ensure_server_running(app: &AppHandle) -> Result<ServerRuntime, String> {
     };
     config.validate()?;
 
-    let (previous_child, launch_id) = {
+    let (previous_child, previous_child_pid, launch_id) = {
         let state = app.state::<ServerState>();
         let mut inner = state.inner.lock().unwrap();
         inner.launch_id += 1;
@@ -299,17 +470,37 @@ fn ensure_server_running(app: &AppHandle) -> Result<ServerRuntime, String> {
         inner.running = false;
         inner.managed_child = false;
         inner.last_error = None;
-        (inner.child.take(), launch_id)
+        (inner.child.take(), inner.child_pid.take(), launch_id)
     };
 
     let had_managed_child = previous_child.is_some();
     if let Some(child) = previous_child {
         let _ = child.kill();
     }
+    if let Some(pid) = previous_child_pid {
+        terminate_pid_tree(pid);
+        thread::sleep(Duration::from_millis(200));
+        force_terminate_pid_tree(pid);
+    }
 
     if had_managed_child {
         wait_for_port_to_close(SERVER_HOST, config.http_port, PORT_RELEASE_TIMEOUT);
     } else if port_open(SERVER_HOST, config.http_port) {
+        if terminate_stale_bundled_sidecar(config.http_port) {
+            wait_for_port_to_close(SERVER_HOST, config.http_port, PORT_RELEASE_TIMEOUT);
+        } else {
+            let state = app.state::<ServerState>();
+            let mut inner = state.inner.lock().unwrap();
+            if inner.launch_id == launch_id {
+                inner.running = true;
+                inner.starting = false;
+                inner.managed_child = false;
+            }
+            return Ok(runtime_from_inner(&inner));
+        }
+    }
+
+    if port_open(SERVER_HOST, config.http_port) {
         let state = app.state::<ServerState>();
         let mut inner = state.inner.lock().unwrap();
         if inner.launch_id == launch_id {
@@ -340,7 +531,9 @@ fn ensure_server_running(app: &AppHandle) -> Result<ServerRuntime, String> {
             let _ = child.kill();
             return Ok(runtime_from_inner(&inner));
         }
+        let child_pid = child.pid();
         inner.child = Some(child);
+        inner.child_pid = Some(child_pid);
         inner.starting = true;
         inner.running = false;
         inner.managed_child = true;
@@ -378,13 +571,14 @@ fn restart_server(app: AppHandle) -> Result<ServerRuntime, String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let initial_config = ServerConfig::default();
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .manage(ServerState {
             inner: Mutex::new(ServerInner {
                 config: initial_config.clone(),
                 active_config: initial_config,
                 child: None,
+                child_pid: None,
                 launch_id: 0,
                 starting: false,
                 running: false,
@@ -410,14 +604,23 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::Destroyed = event {
-                let state: tauri::State<ServerState> = window.state();
-                let maybe_child = state.inner.lock().unwrap().child.take();
-                if let Some(child) = maybe_child {
-                    let _ = child.kill();
+            match event {
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    api.prevent_close();
+                    window.app_handle().exit(0);
                 }
+                tauri::WindowEvent::Destroyed => {
+                    window.app_handle().exit(0);
+                }
+                _ => {}
             }
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|app_handle, event| {
+        if let RunEvent::Exit = event {
+            stop_managed_server(app_handle);
+        }
+    });
 }

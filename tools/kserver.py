@@ -55,6 +55,7 @@ DEFAULT_HTTP_PORT = 9092
 PORT = DEFAULT_WS_PORT
 AGENT_PORT = DEFAULT_AGENT_PORT
 HTTP_PORT = DEFAULT_HTTP_PORT  # HTTP API port for krepl.py to send commands
+ORPHAN_EXIT_ENV = "DARKFORGE_EXIT_WHEN_ORPHANED"
 LOG_PATH = Path("/tmp/krepl-logs.txt")
 SERVER_LOG_LIMIT = 4000
 EXEC_TIMEOUT = 60  # seconds per exec command
@@ -103,6 +104,18 @@ class C:
     BOLD = "\033[1m"
     DIM = "\033[2m"
     RESET = "\033[0m"
+
+
+class AgentJobWorkerConnection:
+    def __init__(self, worker_id: str, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, role: str):
+        self.worker_id = worker_id
+        self.reader = reader
+        self.writer = writer
+        self.role = role
+        self.send_lock = asyncio.Lock()
+        self.active_jobs: set[str] = set()
+        self.last_seen_monotonic: float | None = None
+        self.last_pong_at: str | None = None
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -284,6 +297,7 @@ class ServerState:
         self.agent_bulk_chunk_size: int | None = None
         self.agent_bulk_max: int | None = None
         self.agent_send_lock = asyncio.Lock()
+        self.agent_job_workers: dict[str, AgentJobWorkerConnection] = {}
         self.agent_active_jobs: set[str] = set()
         self.server_url: str | None = None
         self.server_address: str | None = None
@@ -329,6 +343,12 @@ class ServerState:
         self.agent_bulk_chunk_size = None
         self.agent_bulk_max = None
         self.agent_connected.clear()
+        for worker in self.agent_job_workers.values():
+            try:
+                worker.writer.close()
+            except Exception:
+                pass
+        self.agent_job_workers.clear()
         for fut in self.agent_pending.values():
             if not fut.done():
                 fut.set_exception(ConnectionError("Agent disconnected"))
@@ -600,16 +620,47 @@ async def _read_agent_frame(reader: asyncio.StreamReader) -> tuple[str, dict | b
     return "binary", payload
 
 
-async def _send_agent_frame(payload: dict):
-    if not state.agent_writer:
+async def _send_agent_frame(
+    payload: dict,
+    *,
+    writer: asyncio.StreamWriter | None = None,
+    send_lock: asyncio.Lock | None = None,
+):
+    target_writer = writer or state.agent_writer
+    target_lock = send_lock or state.agent_send_lock
+    if not target_writer:
         raise ConnectionError("launchd agent is not connected")
     raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     frame = len(raw).to_bytes(4, "big") + raw
-    async with state.agent_send_lock:
-        if not state.agent_writer:
+    async with target_lock:
+        if not target_writer:
             raise ConnectionError("launchd agent is not connected")
-        state.agent_writer.write(frame)
-        await state.agent_writer.drain()
+        target_writer.write(frame)
+        await target_writer.drain()
+
+
+def _pick_job_worker() -> AgentJobWorkerConnection | None:
+    if not state.agent_job_workers:
+        return None
+    return min(
+        state.agent_job_workers.values(),
+        key=lambda worker: (len(worker.active_jobs), worker.worker_id),
+    )
+
+
+async def _mark_jobs_lost(job_ids: list[str], reason: str):
+    if not job_ids:
+        return
+    for job_id in job_ids:
+        state.agent_active_jobs.discard(job_id)
+        job = _upsert_job(
+            job_id,
+            status="lost",
+            finishedAt=_utc_now_iso(),
+            error=reason,
+        )
+        await _emit_job_event(job)
+    await _emit_status_event()
 
 
 async def _agent_heartbeat_loop(writer: asyncio.StreamWriter):
@@ -782,17 +833,28 @@ async def exec_code(
 async def _submit_job_to_agent(job: dict):
     if not await _ensure_remote_agent_ready():
         raise ConnectionError("launchd agent is not connected")
+    worker = _pick_job_worker()
     state.agent_active_jobs.add(job["jobId"])
+    payload = {
+        "type": "job_submit",
+        "jobId": job["jobId"],
+        "skillId": job.get("skillId", ""),
+        "name": job.get("name", ""),
+        "createdAt": job.get("createdAt"),
+        "code": job.get("code", ""),
+    }
     try:
-        await _send_agent_frame({
-            "type": "job_submit",
-            "jobId": job["jobId"],
-            "skillId": job.get("skillId", ""),
-            "name": job.get("name", ""),
-            "createdAt": job.get("createdAt"),
-            "code": job.get("code", ""),
-        })
+        if worker is not None:
+            worker.active_jobs.add(job["jobId"])
+            job["workerId"] = worker.worker_id
+            await _send_agent_frame(payload, writer=worker.writer, send_lock=worker.send_lock)
+            return
+
+        job["workerId"] = "primary"
+        await _send_agent_frame(payload)
     except Exception:
+        if worker is not None:
+            worker.active_jobs.discard(job["jobId"])
         state.agent_active_jobs.discard(job["jobId"])
         raise
 
@@ -845,13 +907,45 @@ async def _handle_agent_bulk_frame(raw: bytes):
         _finalize_agent_bulk_message(msg_id, data)
 
 
-async def _handle_agent_message(msg: dict):
+async def _handle_agent_message(
+    msg: dict,
+    *,
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
+    connection_info: dict,
+):
     msg_type = msg.get("type")
-    state.agent_last_seen_monotonic = time.monotonic()
+    now = time.monotonic()
+    if connection_info.get("kind") == "job-worker":
+        worker = state.agent_job_workers.get(connection_info.get("worker_id", ""))
+        if worker and worker.writer is writer:
+            worker.last_seen_monotonic = now
+    else:
+        state.agent_last_seen_monotonic = now
     if msg_type == "hello":
-        state.agent_role = str(msg.get("role") or "launchd-agent")
-        if not state.agent_host:
-            state.agent_host = "launchd-agent"
+        role = str(msg.get("role") or "launchd-agent")
+        worker_id = str(msg.get("workerId") or "").strip()
+        if role == "native-agent-job-worker":
+            if not worker_id:
+                worker_id = f"worker-{uuid.uuid4()}"
+            existing = state.agent_job_workers.get(worker_id)
+            if existing and existing.writer is not writer:
+                try:
+                    existing.writer.close()
+                    await existing.writer.wait_closed()
+                except Exception:
+                    pass
+            worker = AgentJobWorkerConnection(worker_id, reader, writer, role)
+            worker.last_seen_monotonic = now
+            worker.last_pong_at = _utc_now_iso()
+            state.agent_job_workers[worker_id] = worker
+            connection_info["kind"] = "job-worker"
+            connection_info["worker_id"] = worker_id
+            await _emit_status_event()
+            return
+
+        state.agent_role = role
+        state.agent_host = str(writer.get_extra_info("peername") or "launchd-agent")
         state.agent_pid = msg.get("pid")
         state.agent_worker_ready = bool(msg.get("workerReady", False))
         state.agent_supports_bulk = bool(msg.get("supportsBulk", False))
@@ -860,17 +954,39 @@ async def _handle_agent_message(msg: dict):
         state.agent_bulk_chunk_size = int(msg.get("bulkChunkSize", 0) or 0) or None
         state.agent_bulk_max = int(msg.get("bulkMax", 0) or 0) or None
         state.agent_last_pong_at = _utc_now_iso()
+        if state.agent_writer is not None and state.agent_writer is not writer:
+            try:
+                state.agent_writer.close()
+                await state.agent_writer.wait_closed()
+            except Exception:
+                pass
+        state.agent_reader = reader
+        state.agent_writer = writer
+        if state.agent_heartbeat_task and not state.agent_heartbeat_task.done():
+            state.agent_heartbeat_task.cancel()
+        state.agent_heartbeat_task = asyncio.create_task(_agent_heartbeat_loop(writer))
         state.agent_connected.set()
         state._refresh_connectivity()
+        connection_info["kind"] = "primary"
         await _emit_status_event()
         return
 
     if msg_type == "pong":
-        state.agent_last_pong_at = str(msg.get("ts") or _utc_now_iso())
+        if connection_info.get("kind") == "job-worker":
+            worker = state.agent_job_workers.get(connection_info.get("worker_id", ""))
+            if worker and worker.writer is writer:
+                worker.last_pong_at = str(msg.get("ts") or _utc_now_iso())
+        else:
+            state.agent_last_pong_at = str(msg.get("ts") or _utc_now_iso())
         return
 
     if msg_type == "ping":
-        await _send_agent_frame({"type": "pong", "ts": _utc_now_iso()})
+        if connection_info.get("kind") == "job-worker":
+            worker = state.agent_job_workers.get(connection_info.get("worker_id", ""))
+            if worker and worker.writer is writer:
+                await _send_agent_frame({"type": "pong", "ts": _utc_now_iso()}, writer=worker.writer, send_lock=worker.send_lock)
+                return
+        await _send_agent_frame({"type": "pong", "ts": _utc_now_iso()}, writer=writer)
         return
 
     if msg_type == "exec_result":
@@ -913,6 +1029,10 @@ async def _handle_agent_message(msg: dict):
         return
 
     if msg_type == "job_result":
+        if connection_info.get("kind") == "job-worker":
+            worker = state.agent_job_workers.get(connection_info.get("worker_id", ""))
+            if worker and worker.writer is writer:
+                worker.active_jobs.discard(job_id)
         state.agent_active_jobs.discard(job_id)
         job = _upsert_job(
             job_id,
@@ -927,6 +1047,10 @@ async def _handle_agent_message(msg: dict):
         return
 
     if msg_type == "job_error":
+        if connection_info.get("kind") == "job-worker":
+            worker = state.agent_job_workers.get(connection_info.get("worker_id", ""))
+            if worker and worker.writer is writer:
+                worker.active_jobs.discard(job_id)
         state.agent_active_jobs.discard(job_id)
         job = _upsert_job(
             job_id,
@@ -942,20 +1066,7 @@ async def _agent_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWri
     remote = writer.get_extra_info("peername")
     _print_status(f"\n[+] launchd agent connected from {remote}")
     _log(f"AGENT CONNECTED from {remote}")
-
-    if state.agent_writer is not None:
-        try:
-            state.agent_writer.close()
-            await state.agent_writer.wait_closed()
-        except Exception:
-            pass
-
-    state.agent_reader = reader
-    state.agent_writer = writer
-    state.agent_host = str(remote)
-    state.agent_last_seen_monotonic = time.monotonic()
-    state.agent_last_pong_at = _utc_now_iso()
-    state.agent_heartbeat_task = asyncio.create_task(_agent_heartbeat_loop(writer))
+    connection_info = {"kind": None, "worker_id": None}
 
     try:
         while True:
@@ -963,7 +1074,7 @@ async def _agent_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWri
             if frame_kind == "binary":
                 await _handle_agent_bulk_frame(frame)
             else:
-                await _handle_agent_message(frame)
+                await _handle_agent_message(frame, reader=reader, writer=writer, connection_info=connection_info)
     except (asyncio.IncompleteReadError, ConnectionError, ValueError) as e:
         _print_status(f"\n[-] launchd agent disconnected: {e}")
         _log(f"AGENT DISCONNECTED: {e}")
@@ -971,8 +1082,17 @@ async def _agent_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWri
         _print_error(f"\nAgent connection error: {e}")
         _log(f"AGENT CONNECTION ERROR: {e}")
     finally:
-        if state.agent_writer is writer:
+        if connection_info.get("kind") == "job-worker":
+            worker_id = connection_info.get("worker_id")
+            worker = state.agent_job_workers.get(worker_id or "")
+            if worker and worker.writer is writer:
+                lost_jobs = list(worker.active_jobs)
+                state.agent_job_workers.pop(worker_id, None)
+                await _mark_jobs_lost(lost_jobs, f"Job worker {worker_id} disconnected")
+        elif state.agent_writer is writer:
+            lost_jobs = list(state.agent_active_jobs)
             state.reset_agent()
+            await _mark_jobs_lost(lost_jobs, "launchd agent disconnected")
             await _emit_status_event()
         try:
             writer.close()
@@ -1408,6 +1528,7 @@ def _status_payload() -> dict:
         "agentWorkerReady": state.agent_worker_ready,
         "agentSupportsBulk": state.agent_supports_bulk,
         "agentSupportsAsync": state.agent_supports_async,
+        "agentJobWorkers": len(state.agent_job_workers),
         "agentInlineLimit": state.agent_inline_limit,
         "agentBulkChunkSize": state.agent_bulk_chunk_size,
         "agentBulkMax": state.agent_bulk_max,
@@ -2164,6 +2285,20 @@ async def _http_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
             except Exception:
                 pass
 
+
+async def _orphan_exit_watch(stop_event: asyncio.Event):
+    if os.environ.get(ORPHAN_EXIT_ENV) != "1":
+        return
+
+    while not stop_event.is_set():
+        await asyncio.sleep(1)
+        if os.getppid() != 1:
+            continue
+        _log("Parent process disappeared; shutting down orphaned kserver.")
+        state.running = False
+        stop_event.set()
+        return
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -2185,6 +2320,7 @@ async def async_main():
     _log(f"Logs: {LOG_PATH}")
 
     stop_event = asyncio.Event()
+    orphan_watch_task = asyncio.create_task(_orphan_exit_watch(stop_event))
 
     # Start HTTP API server for krepl.py
     http_server = await asyncio.start_server(_http_handler, "0.0.0.0", HTTP_PORT)
@@ -2233,6 +2369,11 @@ async def async_main():
                     except Exception:
                         pass
                 _close_log()
+    orphan_watch_task.cancel()
+    try:
+        await orphan_watch_task
+    except asyncio.CancelledError:
+        pass
 
 
 def main():

@@ -81,11 +81,29 @@ class WebUiAssetTests(unittest.TestCase):
         self.assertIn("managePackagesButton", ids)
         self.assertIn("packageModal", ids)
 
+    def test_confirm_modal_controls_exist_in_index(self) -> None:
+        ids = self._index_element_ids()
+        self.assertIn("confirmModal", ids)
+        self.assertIn("confirmModalTitle", ids)
+        self.assertIn("confirmModalMessage", ids)
+        self.assertIn("confirmModalCancel", ids)
+        self.assertIn("confirmModalAccept", ids)
+
     def test_app_fetches_runtime_catalog_and_package_endpoints(self) -> None:
         app_js = (WEB_UI_DIR / "app.js").read_text(encoding="utf-8")
         self.assertIn('/api/runtime/catalog', app_js)
         self.assertIn('/api/package-import/install', app_js)
         self.assertIn('/api/libraries/', app_js)
+
+    def test_delete_actions_use_in_app_confirmation(self) -> None:
+        app_js = (WEB_UI_DIR / "app.js").read_text(encoding="utf-8")
+        files_js = (WEB_UI_DIR / "src" / "files.js").read_text(encoding="utf-8")
+        shared_js = (WEB_UI_DIR / "src" / "shared.js").read_text(encoding="utf-8")
+
+        self.assertIn("function confirmAction(", shared_js)
+        self.assertIn("installConfirmBehaviors();", app_js)
+        self.assertNotIn("window.confirm(", app_js)
+        self.assertNotIn("window.confirm(", files_js)
 
 
 if __name__ == "__main__":

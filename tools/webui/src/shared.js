@@ -32,6 +32,7 @@ export const state = {
   skillEntryFile: "",
   skillLibraryDependencies: [],
   activeJobId: null,
+  activeJobToast: null,
   jobs: {},
   eventSource: null,
 };
@@ -139,7 +140,18 @@ export const els = {
   installPackageButton: document.querySelector("#installPackageButton"),
   packageList: document.querySelector("#packageList"),
   libraryList: document.querySelector("#libraryList"),
+  confirmModal: document.querySelector("#confirmModal"),
+  confirmModalTitle: document.querySelector("#confirmModalTitle"),
+  confirmModalMessage: document.querySelector("#confirmModalMessage"),
+  confirmModalClose: document.querySelector("#confirmModalClose"),
+  confirmModalCancel: document.querySelector("#confirmModalCancel"),
+  confirmModalAccept: document.querySelector("#confirmModalAccept"),
   toastContainer: document.querySelector("#toastContainer"),
+};
+
+const confirmDialogState = {
+  resolve: null,
+  previousFocus: null,
 };
 
 export function escapeHtml(value) {
@@ -153,17 +165,53 @@ export function formatDate(value) {
   return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-export function showToast(message, variant = "info", duration = 3000) {
+export function showToast(message, variant = "info", duration = 3000, options = {}) {
+  const { dismissible = duration > 0 } = options;
   const toast = document.createElement("div");
   toast.className = `toast ${variant}`;
-  toast.innerHTML = `<span class="toast-icon"></span><span>${escapeHtml(message)}</span>`;
+  const icon = document.createElement("span");
+  icon.className = "toast-icon";
+  const text = document.createElement("span");
+  text.className = "toast-message";
+  text.textContent = String(message);
+  toast.append(icon, text);
   els.toastContainer.append(toast);
+
+  let removed = false;
+  let timerId = null;
+
   const dismiss = () => {
+    if (removed || toast.classList.contains("toast-out")) return;
+    if (timerId !== null) {
+      clearTimeout(timerId);
+      timerId = null;
+    }
     toast.classList.add("toast-out");
-    toast.addEventListener("animationend", () => toast.remove(), { once: true });
+    toast.addEventListener("animationend", () => {
+      removed = true;
+      toast.remove();
+    }, { once: true });
   };
-  toast.addEventListener("click", dismiss);
-  setTimeout(dismiss, duration);
+  const update = (nextMessage, nextVariant = variant, nextDuration = duration, nextOptions = {}) => {
+    const nextDismissible = nextOptions.dismissible ?? (nextDuration > 0);
+    toast.className = `toast ${nextVariant}`;
+    text.textContent = String(nextMessage);
+    toast.onclick = nextDismissible ? dismiss : null;
+    if (timerId !== null) {
+      clearTimeout(timerId);
+      timerId = null;
+    }
+    if (nextDuration > 0) {
+      timerId = setTimeout(dismiss, nextDuration);
+    }
+  };
+
+  toast.onclick = dismissible ? dismiss : null;
+  if (duration > 0) {
+    timerId = setTimeout(dismiss, duration);
+  }
+
+  return { dismiss, update, element: toast };
 }
 
 export function copyTextToClipboard(text, button) {
@@ -218,6 +266,61 @@ export function installModalDismiss() {
     if (event.key === "Escape") {
       document.querySelectorAll(".modal-overlay:not([hidden])").forEach(closeModal);
     }
+  });
+}
+
+function settleConfirmDialog(confirmed) {
+  const resolve = confirmDialogState.resolve;
+  const previousFocus = confirmDialogState.previousFocus;
+  confirmDialogState.resolve = null;
+  confirmDialogState.previousFocus = null;
+  closeModal(els.confirmModal);
+  els.confirmModalAccept.classList.remove("btn-danger", "btn-primary");
+  if (resolve) resolve(confirmed);
+  if (previousFocus?.focus) {
+    window.requestAnimationFrame(() => previousFocus.focus());
+  }
+}
+
+export function installConfirmBehaviors() {
+  if (!els.confirmModal) return;
+  const cancel = () => settleConfirmDialog(false);
+  const accept = () => settleConfirmDialog(true);
+  els.confirmModalClose.addEventListener("click", cancel);
+  els.confirmModalCancel.addEventListener("click", cancel);
+  els.confirmModalAccept.addEventListener("click", accept);
+  els.confirmModal.addEventListener("click", (event) => {
+    if (event.target === els.confirmModal) cancel();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || els.confirmModal.hidden) return;
+    event.preventDefault();
+    cancel();
+  });
+}
+
+export function confirmAction({
+  title = "Confirm action",
+  message,
+  confirmLabel = "Confirm",
+  cancelLabel = "Cancel",
+  variant = "danger",
+} = {}) {
+  if (!message) throw new Error("Confirmation message is required.");
+  if (confirmDialogState.resolve) settleConfirmDialog(false);
+
+  els.confirmModalTitle.textContent = title;
+  els.confirmModalMessage.textContent = message;
+  els.confirmModalCancel.textContent = cancelLabel;
+  els.confirmModalAccept.textContent = confirmLabel;
+  els.confirmModalAccept.classList.remove("btn-danger", "btn-primary");
+  els.confirmModalAccept.classList.add(variant === "primary" ? "btn-primary" : "btn-danger");
+  confirmDialogState.previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+
+  openModal(els.confirmModal);
+  window.requestAnimationFrame(() => els.confirmModalCancel.focus());
+  return new Promise((resolve) => {
+    confirmDialogState.resolve = resolve;
   });
 }
 

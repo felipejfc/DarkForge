@@ -1016,6 +1016,13 @@ button { border: 0; cursor: pointer; }
   padding: 16px 20px;
 }
 
+.confirm-modal-message {
+  margin: 0;
+  color: var(--text);
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
 .modal-footer {
   flex: 0 0 auto;
   display: flex;
@@ -1828,6 +1835,11 @@ button { border: 0; cursor: pointer; }
 
 .toast.toast-out { animation: toast-out var(--transition-med) forwards; }
 
+.toast-message {
+  white-space: pre-line;
+  line-height: 1.4;
+}
+
 .toast-icon {
   flex-shrink: 0;
   width: 8px;
@@ -1838,6 +1850,21 @@ button { border: 0; cursor: pointer; }
 .toast.success .toast-icon { background: var(--success); box-shadow: 0 0 10px var(--success); }
 .toast.error .toast-icon { background: var(--danger); box-shadow: 0 0 10px var(--danger); }
 .toast.info .toast-icon { background: var(--accent); box-shadow: 0 0 10px var(--accent); }
+.toast.running {
+  border-color: rgba(101, 224, 255, 0.28);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(101, 224, 255, 0.1) inset;
+}
+.toast.running .toast-icon {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid rgba(101, 224, 255, 0.22);
+  border-top-color: var(--accent);
+  border-right-color: var(--accent);
+  background: transparent;
+  box-shadow: none;
+  animation: toast-spin 0.85s linear infinite;
+}
 
 @keyframes toast-in {
   from { opacity: 0; transform: translateY(12px) scale(0.95); }
@@ -1847,6 +1874,10 @@ button { border: 0; cursor: pointer; }
 @keyframes toast-out {
   from { opacity: 1; transform: translateY(0) scale(1); }
   to { opacity: 0; transform: translateY(-8px) scale(0.95); }
+}
+
+@keyframes toast-spin {
+  to { transform: rotate(360deg); }
 }
 
 /* ---- Autocomplete popup ---- */

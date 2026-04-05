@@ -1,6 +1,7 @@
 import { API_CATALOG, API_CATEGORIES, DEFAULT_SCRIPT, updateApiCatalog } from "./src/catalog.js";
 import {
   closeModal,
+  confirmAction,
   connectEventStream,
   copyServerLogs,
   els,
@@ -8,6 +9,7 @@ import {
   escapeHtml,
   formatDate,
   installConsoleBehaviors,
+  installConfirmBehaviors,
   installModalDismiss,
   openModal,
   refreshServerLogs,
@@ -443,6 +445,12 @@ function renderSkillGrid() {
       sourceTag.textContent = skill.sourceType === "linked" ? `Linked${skill.packageName ? ` · ${skill.packageName}` : ""}` : (skill.sourceType === "local" ? "Local" : "Built-in");
       tags.append(sourceTag);
     }
+    if (skill.executionMode === "job") {
+      const modeTag = document.createElement("span");
+      modeTag.className = "tag tag-warm";
+      modeTag.textContent = "Detached Job";
+      tags.append(modeTag);
+    }
     if (skill.inputCount > 0) {
       const inputTag = document.createElement("span");
       inputTag.className = "tag tag-muted";
@@ -583,6 +591,31 @@ function initiateRun() {
   }
 }
 
+function formatJobToastMessage(jobId, status) {
+  const label = status === "queued" ? "Async job queued" : "Async job running";
+  return `${label}\n${jobId}`;
+}
+
+function showActiveJobToast(jobId, status) {
+  const message = formatJobToastMessage(jobId, status);
+  if (state.activeJobToast) {
+    state.activeJobToast.update(message, "running", 0, { dismissible: false });
+    return;
+  }
+  state.activeJobToast = showToast(message, "running", 0, { dismissible: false });
+}
+
+function resolveActiveJobToast(message, variant) {
+  const duration = variant === "error" ? 5000 : 2200;
+  if (state.activeJobToast) {
+    const toast = state.activeJobToast;
+    state.activeJobToast = null;
+    toast.update(message, variant, duration, { dismissible: true });
+    return;
+  }
+  showToast(message, variant, duration);
+}
+
 async function executeRun() {
   closeModal(els.runModal);
   const code = els.editorInput.value;
@@ -620,12 +653,12 @@ async function executeRun() {
     });
     if (result.jobId) {
       state.activeJobId = result.jobId;
+      showActiveJobToast(result.jobId, "queued");
       const elapsed = `${Math.round(performance.now() - startedAt)} ms`;
       setRunMeta(`Job queued in ${elapsed}`, "running");
-      writeResult(`Detached job started.\njobId: ${result.jobId}`);
+      writeResult(`Async job started.\njobId: ${result.jobId}`);
       writeLogs([]);
       setConsoleTab("result");
-      showToast("Detached job started", "info");
       await refreshJob(result.jobId);
     } else {
       const elapsed = `${Math.round(performance.now() - startedAt)} ms`;
@@ -710,7 +743,12 @@ async function saveSkill() {
 async function deleteSkill() {
   if (!state.selectedSkillId) return;
   const skill = state.skills.find((item) => item.id === state.selectedSkillId);
-  if (!window.confirm(`Delete skill "${skill?.name || state.selectedSkillId}"?`)) return;
+  const confirmed = await confirmAction({
+    title: "Delete skill",
+    message: `Delete skill "${skill?.name || state.selectedSkillId}"?`,
+    confirmLabel: "Delete skill",
+  });
+  if (!confirmed) return;
 
   setBusy(true);
   try {
@@ -746,11 +784,13 @@ function handleJobEvent(job) {
   if (Array.isArray(job.logs) && job.logs.length > 0) writeLogs(job.logs);
 
   if (job.status === "running" || job.status === "queued") {
+    showActiveJobToast(job.jobId, job.status);
     setRunMeta(`Job ${job.status}`, "running");
     return;
   }
   if (job.status === "completed") {
     setBusy(false);
+    resolveActiveJobToast(`Async job completed\n${job.jobId}`, "success");
     setRunMeta("Job completed");
     writeResult(job.result || "undefined", false);
     setConsoleTab((job.logs || []).length > 0 ? "logs" : "result");
@@ -758,8 +798,9 @@ function handleJobEvent(job) {
   }
   if (job.status === "failed" || job.status === "lost") {
     setBusy(false);
+    resolveActiveJobToast(`Async job ${job.status}\n${job.jobId}`, "error");
     setRunMeta(`Job ${job.status}`, "error");
-    writeResult(job.error || "Detached job failed", true);
+    writeResult(job.error || "Job failed", true);
     setConsoleTab("result");
   }
 }
@@ -933,7 +974,12 @@ async function updatePackage(packageId) {
 }
 
 async function deletePackage(packageId) {
-  if (!window.confirm(`Remove repo "${packageId}"?`)) return;
+  const confirmed = await confirmAction({
+    title: "Remove repo",
+    message: `Remove repo "${packageId}"?`,
+    confirmLabel: "Remove repo",
+  });
+  if (!confirmed) return;
   await requestJson(`/api/packages/${encodeURIComponent(packageId)}`, { method: "DELETE" });
   showToast(`Removed repo "${packageId}"`, "info");
   await Promise.all([refreshSkills(), refreshPackagesAndLibraries()]);
@@ -1247,6 +1293,7 @@ function activateView(view) {
 }
 
 async function init() {
+  installConfirmBehaviors();
   installModalDismiss();
   installEditorBehaviors();
   installAutocompleteBehaviors();

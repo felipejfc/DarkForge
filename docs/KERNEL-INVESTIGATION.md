@@ -289,7 +289,7 @@ The deltas are NOT consistent — each field shifted by a different amount. This
 7. **Live probing is dangerous** for unverified offsets — reading wrong kernel addresses can panic. Static analysis first, live verification only for confirmed offsets.
 13. **MIG bypass not needed on iOS < 18.4.** The sandbox MIG filter that blocks `thread_set_exception_ports` was added in iOS 18.4. On earlier versions (e.g., iPad8,9 on 18.3.2), the MIG offsets can be left zeroed.
 14. **Thread list walk: read64(entry + threadTaskThreads), NOT read64(entry).** The queue at task+0x50 stores thread BASE addresses. Following the chain requires adding the threadTaskThreads offset. Reading at offset 0 of the entry gives the PREV pointer, causing an infinite 2-entry loop. Verified via REPL: 9 real threads vs infinite loop with wrong walk.
-15. **PAC key swap has a multi-core race.** Writing our key → target jopPid, sending reply, then restoring creates a window where the thread runs with our key. Simple syscalls (getpid, mmap svc) survive because they don't use IA-authenticated calls. Complex functions (malloc) crash because zone allocator vtables use PAC. Restoring BEFORE send doesn't work either — the kernel validates the incoming PAC against jopPid at processing time. This is a fundamental limitation of the key-swap approach; the DarkSword signing thread (copy target key to local thread) would avoid this.
+15. **PAC key swap has a multi-core race.** Writing our key → target jopPid, sending reply, then restoring creates a window where the thread runs with our key. Early key-swap-only experiments showed instability in some authenticated code paths. Restoring BEFORE send doesn't work either — the kernel validates the incoming PAC against jopPid at processing time. The signing-thread approach reduces this limitation substantially.
 16. **iOS apps cannot allocate executable pages** without a JIT entitlement. `mach_vm_protect(PROT_EXEC)` silently fails or the page faults on instruction fetch. Gadgets must be found in already-loaded shared cache frameworks.
 17. **Cross-device offsets are never safe to assume.** iPad8,9 (A12Z) vs iPhone17,4 (A18) have completely different thread struct layouts (deltas -0x58 to -0x90). Even IPC offsets that happen to match (taskIpcSpace=0x318) must be independently verified. The only reliably stable offsets are task linked list pointers (taskNext=0x30, taskPrev=0x38) and struct-internal layouts (proc_ro fields, thread_ro fields) within the same iOS major version.
 
@@ -325,14 +325,14 @@ The deltas are NOT consistent — each field shifted by a different amount. This
    ```
    **NO `msr apiakeylo_el1`** — the IA key register is never switched per-thread.
 
-2. **CRITICAL DISCOVERY (CORRECTED)**: The field at thread+0x160 on iPad is the **IA key**. It is loaded into `APIAKEYLO_EL1` during EXCEPTION RETURN (at `0xfffffff007e5bf64`), NOT during `Switch_context`. The exception return code: `ldr x1, [thread, #0x160]; msr apiakeylo_el1, x1; add x3, x1, #1; msr apiakeyhi_el1, x3`. This only happens when flag at thread+0xa8 bit 1 is clear (userspace return). The value `0xFEEDFACEFEEDFAD5` for launchd is launchd's actual IA key. Key write must happen while thread is BLOCKED in exception delivery — writing while thread is suspended mid-syscall corrupts the return path. Previously misidentified as IB key (value `0xFEEDFACEFEEDFAD5` for launchd — the well-known B-key constant). The DeviceProfile names it `troPacJopPid` but it's the IB key, NOT the IA key. Writing our key there corrupts the target's IB key, causing `retab` (IB-authenticated return) to fail in complex functions (malloc, pthread_create). Simple syscall wrappers (getpid=`svc;ret`) work because they don't use authenticated returns. The field IS used by the kernel's `machine_thread_set_state` for thread state authentication — but writing it has the side effect of breaking IB-authenticated code in the target.
+2. **CRITICAL DISCOVERY (CORRECTED)**: The field at thread+0x160 on iPad is the **IA key**. It is loaded into `APIAKEYLO_EL1` during EXCEPTION RETURN (at `0xfffffff007e5bf64`), NOT during `Switch_context`. The exception return code: `ldr x1, [thread, #0x160]; msr apiakeylo_el1, x1; add x3, x1, #1; msr apiakeyhi_el1, x3`. This only happens when flag at thread+0xa8 bit 1 is clear (userspace return). The value `0xFEEDFACEFEEDFAD5` for launchd is launchd's actual IA key. Key write must happen while thread is BLOCKED in exception delivery — writing while thread is suspended mid-syscall corrupts the return path. Previously misidentified as IB key (value `0xFEEDFACEFEEDFAD5` for launchd — the well-known B-key constant). The DeviceProfile names it `troPacJopPid` but it's the IB key, NOT the IA key. Early key-swap-only experiments showed that writing our key there could disturb IB-authenticated returns in some higher-level code paths. The field IS used by the kernel's `machine_thread_set_state` for thread state authentication.
 
 3. **PAC key swap model (working, commit 7fecf81)**:
    - Before sign: write OUR key → target thread's jopPid (thread+0x160 via queue entry)
    - Sign PC/LR with local `pacia_sign()` (uses our IA key)
    - Send exception reply via `mach_msg`
    - Immediately after send: restore target's original key
-   - **Race condition**: On multi-core, the target thread may start executing before we restore. Simple syscalls (getpid, mmap) work fine. Complex functions (malloc) may hit PAC-authenticated internal calls with the wrong key.
+   - **Race condition**: On multi-core, the target thread may start executing before we restore. Early key-swap-only tests showed this could destabilize some authenticated return paths.
 
 4. **`machine_thread_set_state` flow** (from IDA Pro at 0xfffffff007feda18):
    - Calls `_ml_check_signed_state` (PACGA hash validation of CURRENT saved state)
@@ -343,9 +343,9 @@ The deltas are NOT consistent — each field shifted by a different amount. This
    - **Tested**: sending raw stripped PC (no PAC) with KERNEL_SIGNED cleared → kernel accepts it (PACGA re-signed) → but thread crashes on execution because hardware instruction fetch fails PAC check.
    - **Conclusion**: `pacia_sign` with the correct IA key IS required. The key swap (write our key to target's +0x160) is the only working approach. The kernel's PACGA is for internal integrity only; hardware PAC on instruction fetch is separate.
 
-5. **Key swap mystery**: Writing our key to thread+0x160 (IB key field) was empirically required for getpid to work, even though `machine_thread_set_state` only uses PACGA (not IA). The mechanism by which this write enables the reply is UNKNOWN — it may affect something in the exception delivery/reply path outside of `machine_thread_set_state`, or it may affect thread scheduling/signal delivery. Without the write, launchd crashes (`initproc exited`). With the write, simple syscalls work but complex functions (malloc, pthread_create) crash due to IB key corruption.
+5. **Key swap mystery**: Writing our key to thread+0x160 (IB key field) was empirically required for getpid to work, even though `machine_thread_set_state` only uses PACGA (not IA). The mechanism by which this write enables the reply is UNKNOWN — it may affect something in the exception delivery/reply path outside of `machine_thread_set_state`, or it may affect thread scheduling/signal delivery. Without the write, launchd crashes (`initproc exited`). Early key-swap-only testing showed instability in some IB-authenticated return paths.
    - **Before send restore**: crashes getpid. The write is needed at mach_msg time.
-   - **After send restore**: getpid/mmap work. Complex functions crash (IB-authenticated `retab` fails).
+   - **After send restore**: getpid/mmap work. Historical failures in some IB-authenticated return paths were part of the motivation for the later signing-thread/stable-thread flow.
 
 6. **`threads_ro` zone**: Thread RO elements are only 88 bytes on iPad. The `troPacJopPid=0x160` offset is NOT inside thread_ro — it's at `thread_base + 0x160` in the thread struct itself. Writing via `queue_entry + troPacJopPid` where queue_entry = `thread_base + 0x360` would write to `thread_base + 0x4C0`, which is a DIFFERENT field. The working commit read `task+0x50` (queue head) directly and applied the offset to that value, effectively computing `thread_base + 0x160`.
 
@@ -368,12 +368,11 @@ The deltas are NOT consistent — each field shifted by a different amount. This
 - `getpid` → x0=1, ret PC=0x201 ✓ (getpid IS the raw wrapper, no `__` needed)
 - `__bsdthread_create` → svc executes, returned EINVAL (bad args) but syscall DID run
 
-**Verified BROKEN (libc wrappers):**
+**Historically problematic during early key-swap-only testing:**
 - `mmap` → crashes mid-function, x0=input arg (never modified), ret PC=mmap+4
-- `pthread_create_suspended_np` → crashes mid-function, x0=garbage
 - `malloc` → crashes mid-function (IA-authenticated zone allocator vtables)
 
-**Rule: ALL remote calls must use `__` prefixed raw syscall wrappers (or known-simple wrappers like getpid).**
+**Rule:** Prefer `__`-prefixed raw syscall wrappers for simple probes and bootstrap steps. Higher-level wrappers are not categorically excluded; `pthread_create_suspended_np` is part of the current stable/signing-thread setup once SP/PAC handling is correct.
 
 **Error handling:**
 - On success: carry=0, x0=return value, ret PC=0x201 (hit our crash LR)

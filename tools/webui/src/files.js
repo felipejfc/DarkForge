@@ -1,5 +1,5 @@
 import { TEXT_EXTENSIONS, UPLOAD_CHUNK_SIZE } from "./catalog.js";
-import { els, requestJson, showToast, state } from "./shared.js";
+import { confirmAction, els, requestJson, showToast, state } from "./shared.js";
 
 function setFileBusy(nextBusy) {
   state.fileBusy = nextBusy;
@@ -435,7 +435,12 @@ async function deleteSelection() {
   const message = isDir
     ? `Delete directory "${label}" and all its contents? This cannot be undone.`
     : `Delete "${label}"? This cannot be undone.`;
-  if (!window.confirm(message)) return;
+  const confirmed = await confirmAction({
+    title: isDir ? "Delete directory" : "Delete file",
+    message,
+    confirmLabel: isDir ? "Delete directory" : "Delete file",
+  });
+  if (!confirmed) return;
   setFileBusy(true);
   setFileStatus("Deleting…", "running");
   try {
