@@ -29,8 +29,6 @@ These are the fields currently modeled in
 | `proComm` | Yes | Yes | Process-name matching |
 | `icmp6Filter` | Yes | Yes | Early PCB corruption and kRW bootstrap |
 | `socketSoCount` | Yes | Yes | Socket leak to keep kRW alive |
-| `threadJopDisable` | Yes | Conditional | JOP/PAC bypass path in `RemoteCall` |
-| `pacizaGadget` | Yes | Conditional | Remote pointer-signing helper |
 | `troPacRopPid` | No | No | Present in the profile, not used by live app logic |
 | `troPacJopPid` | Export-only | No | Exported to REPL metadata, not required by exploit flow |
 | `ptovTableOffset` | No | No today | Used only by `PhysTranslation`, not wired into current runtime |
@@ -72,15 +70,9 @@ are no longer needed for new target support.
 | `migSbxMsg` | Removed |
 | `migKernelStackLR` | Removed |
 | `sbEvalCallerOffsets` | Removed |
+| `threadJopDisable` | Removed — signing now handled by PAC oracle |
+| `pacizaGadget` | Removed — signing now handled by PAC oracle |
 
 ## Porting Guidance
 
 For a new target, collect all rows marked `Yes`.
-
-Then decide whether you also need the `Conditional` rows:
-
-- `threadJopDisable`
-- `pacizaGadget`
-
-Those are only needed when you want the current remote-call signing and JOP
-bypass path to work on that target.

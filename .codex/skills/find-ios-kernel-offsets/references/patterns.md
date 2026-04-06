@@ -27,8 +27,8 @@ still semantically muddy.
   directly from the kernelcache.
 - `proPid` is still the muddiest identity field in DarkForge because the repo
   mixes `proc` and `proc_ro` semantics across builds.
-- `pacizaGadget` is not a kernelcache offset. It comes from the dyld shared
-  cache.
+- `threadJopDisable` and `pacizaGadget` have been removed from the active
+  schema. Signing is now handled by the PAC oracle. Skip these when porting.
 - Some iPad values conflict between the current Swift profile and the later
   investigation notes. Those conflicts are called out explicitly below.
 
@@ -54,7 +54,6 @@ are crisp and the instruction shapes are obvious.
 | `icmp6Filter` | `_icmp6_dgram_attach` `0xfffffff00855dc50: str x8, [x19, #0x148]` | `icmp6_dgram_attach` `0xfffffff008258534: str x8, [x19, #0x148]` | Search `icmp6_dgram_attach`; the store into the inpcb is the field. |
 | `socketSoCount` | iPhone local notes: `soclose` reads `thread/socket + 0x254`; current repo historically used `0x254` | `soclose` `0xfffffff00837e07c: ldr w8, [x19, #0x254]` and later `str w9, [x19, #0x254]` | In `soclose`, identify the decrement/store of the socket refcount. |
 | `ipcSpaceTable` | `_ipc_space_terminate` `0xfffffff00812f39c: ldr x16, [x19, #0x20]` + `autda` | `ipc_space_terminate` `0xfffffff007e8ccec: ldr x16, [x8, #0x20]!` + `autda` | Find the authenticated table-pointer load from `ipc_space`. |
-| `threadJopDisable` | `machine_thread_state_convert_from_user` `0xfffffff0082cc544: ldrb w8, [x20, #0xf8]; tbnz w8, #1, skip_pac` | `machine_thread_state_convert_from_user` `0xfffffff007fedd98: ldrb w8, [x22, #0xa8]; tbnz w8, #1, skip_pac` | Hunt the first byte load guarded by `tbnz bit 1` in the PAC-skip path. |
 | `proComm` | `_thread_update_process_threads`, `_task_info`, `_task_port_space_ast`, `_bsdinit_task` all derive `proc + 0x56c` | `task_wakeups_rate_exceeded`, `task_deallocate_internal`, `bsdinit_task`, `ktrace_set_owning_proc` all derive `proc + 0x56c` | This is a proc-side field on both known targets. |
 
 ## What Is Actually Weak
@@ -329,13 +328,6 @@ These are medium-confidence, not weak:
 - Status:
   no longer weak. The offset is structurally solid on both known builds.
 
-### `threadJopDisable`
-
-- Reliable anchor:
-  `machine_thread_state_convert_from_user`.
-- Pattern:
-  first byte load tested with `tbnz bit 1` on the PAC-skip path.
-
 ### `ptovTableOffset`
 
 - iPad only.
@@ -361,68 +353,11 @@ These are medium-confidence, not weak:
   search SPTM PA->KVA helpers for a two-qword global struct used as the linear
   translation base.
 
-### `pacizaGadget`
+### `pacizaGadget` (removed)
 
-- Not a kernelcache field.
-- Recover it from the dyld shared cache.
-- Best clue:
-  prefer dyld's `mach_o::ChainedFixupPointerOnDisk::Arm64e::signPointer`
-  helper over hunting a random `paciza x0; ret`.
-- Runtime note:
-  this address is unslid. If the app resolves the live address by shared-cache
-  slide, it needs a correct unslid anchor from the same cache mapping.
-  `objc_msgSend` is a practical anchor:
-  - iPhone 22G86 `/usr/lib/libobjc.A.dylib`: `0x180109c00`
-  - iPad 22D82 `/usr/lib/libobjc.A.dylib`: `0x180103c00`
-- iPhone 22G86 concrete symbol:
-  `/usr/lib/dyld` at unslid address `0x1a962b0a4`
-  resolves to
-  `__ZN6mach_o25ChainedFixupPointerOnDisk6Arm64e11signPointerEyPvbth`.
-- iPhone 22G86 concrete disassembly shape:
-  `cbz x0, ret`
-  `mov w8, w3`
-  `bfi x1, x8, #0x30, #0x10`
-  `cmp w2, #0`
-  `csel x16, x8, x1, eq`
-  then a 4-way key switch on `w4`:
-  `0 -> pacia1716`
-  `1 -> pacib1716`
-  `2 -> pacda x17, x16`
-  `3 -> pacdb x17, x16`
-  followed by `mov x0, x17; ret`.
-- Why this is a good pattern:
-  it is semantically stronger than a naked PAC gadget. It is a real signing
-  routine that takes a pointer, blends/chooses the discriminator, selects the
-  PAC key family, signs into `x17`, and returns it in `x0`.
-- How to search on a new target:
-  1. Search the dyld shared cache for the mangled symbol above in `/usr/lib/dyld`.
-  2. If symbols are missing, search for the instruction motif:
-     `bfi x1, x8, #0x30, #0x10`
-     followed closely by
-     `csel x16, x8, x1, eq`
-     and then the four PAC alternatives
-     `pacia1716`, `pacib1716`, `pacda`, `pacdb`.
-  3. Confirm the function ends with `mov x0, x17; ret`.
-  4. Cross-check against callers or wrappers that select PAC mode `0/1/2/3`.
-- iPad status:
-  found directly in the local iPad 22D82 cache at unslid address
-  `0x1a8e71b74` in `/usr/lib/dyld`.
-- iPad 22D82 disassembly shape:
-  same high-level logic, but implemented with a jump table:
-  `cbz x0, ret`
-  `mov w8, w3`
-  `bfi x1, x8, #0x30, #0x10`
-  `cmp w2, #0`
-  `csel x8, x8, x1, eq`
-  `cmp w4, #0x3`
-  `b.hi cold`
-  then jump-table dispatch to blocks ending in
-  `pacia1716`, `pacda`, `pacib1716`, `pacdb`
-  followed by `mov x0, x17; ret`.
-- iPad wrapper:
-  `0x1a8ec78d4` is the two-argument const-method wrapper
-  `mach_o::ChainedFixupPointerOnDisk::Arm64e::signPointer(void*, unsigned long long) const`
-  that unpacks bitfields and tail-branches into the five-argument helper above.
+`pacizaGadget` and `threadJopDisable` have been removed from the active schema.
+Signing is now handled entirely by the PAC oracle. These sections are kept for
+historical reference only.
 
 ## Current Conflicts And Weak Spots
 

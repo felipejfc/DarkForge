@@ -7,6 +7,9 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
     ) -> Bool {
+        let syncLogging = ServerConfiguration.synchronousLogging
+        print("[DarkForge] Synchronous logging: \(syncLogging ? "ON" : "OFF")")
+
         return true
     }
 

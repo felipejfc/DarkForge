@@ -269,6 +269,32 @@ class ConfigurationsViewController: UIViewController, UITextFieldDelegate {
         return field
     }()
 
+    private let syncLoggingLabel: UILabel = {
+        let label = UILabel()
+        label.text = "Synchronous HTTP Logs"
+        label.font = UIFont.monospacedSystemFont(ofSize: 11, weight: .medium)
+        label.textColor = Theme.textDim
+        label.translatesAutoresizingMaskIntoConstraints = false
+        return label
+    }()
+
+    private let syncLoggingSwitch: UISwitch = {
+        let toggle = UISwitch()
+        toggle.onTintColor = Theme.accent
+        toggle.translatesAutoresizingMaskIntoConstraints = false
+        return toggle
+    }()
+
+    private let syncLoggingDescLabel: UILabel = {
+        let label = UILabel()
+        label.text = "Block until each log is delivered (retries on failure)."
+        label.font = UIFont.systemFont(ofSize: 11, weight: .regular)
+        label.textColor = Theme.textDim
+        label.numberOfLines = 0
+        label.translatesAutoresizingMaskIntoConstraints = false
+        return label
+    }()
+
     private let serverHintLabel: UILabel = {
         let label = UILabel()
         label.text = "Uses ws://<address>:\(ServerConfiguration.defaultReplPort) and http://<address>:\(ServerConfiguration.defaultLogPort)/log.html"
@@ -349,6 +375,9 @@ class ConfigurationsViewController: UIViewController, UITextFieldDelegate {
         serverCard.addSubview(agentPortField)
         serverCard.addSubview(logPortTitleLabel)
         serverCard.addSubview(logPortField)
+        serverCard.addSubview(syncLoggingLabel)
+        serverCard.addSubview(syncLoggingSwitch)
+        serverCard.addSubview(syncLoggingDescLabel)
         serverCard.addSubview(serverHintLabel)
         serverCard.addSubview(serverSaveButton)
         serverCard.addSubview(serverStatusLabel)
@@ -363,6 +392,7 @@ class ConfigurationsViewController: UIViewController, UITextFieldDelegate {
         logPortField.addTarget(self, action: #selector(serverPortsEditingChanged), for: .editingChanged)
         replButton.addTarget(self, action: #selector(reconnectTapped), for: .touchUpInside)
         replDisconnectButton.addTarget(self, action: #selector(disconnectTapped), for: .touchUpInside)
+        syncLoggingSwitch.addTarget(self, action: #selector(syncLoggingSwitchChanged), for: .valueChanged)
         serverSaveButton.addTarget(self, action: #selector(saveServerAddressTapped), for: .touchUpInside)
 
         NSLayoutConstraint.activate([
@@ -453,7 +483,17 @@ class ConfigurationsViewController: UIViewController, UITextFieldDelegate {
             logPortField.trailingAnchor.constraint(equalTo: serverTitleLabel.trailingAnchor),
             logPortField.heightAnchor.constraint(equalToConstant: 44),
 
-            serverHintLabel.topAnchor.constraint(equalTo: logPortField.bottomAnchor, constant: 10),
+            syncLoggingLabel.topAnchor.constraint(equalTo: logPortField.bottomAnchor, constant: 14),
+            syncLoggingLabel.leadingAnchor.constraint(equalTo: serverTitleLabel.leadingAnchor),
+
+            syncLoggingSwitch.centerYAnchor.constraint(equalTo: syncLoggingLabel.centerYAnchor),
+            syncLoggingSwitch.trailingAnchor.constraint(equalTo: serverTitleLabel.trailingAnchor),
+
+            syncLoggingDescLabel.topAnchor.constraint(equalTo: syncLoggingLabel.bottomAnchor, constant: 4),
+            syncLoggingDescLabel.leadingAnchor.constraint(equalTo: serverTitleLabel.leadingAnchor),
+            syncLoggingDescLabel.trailingAnchor.constraint(equalTo: serverTitleLabel.trailingAnchor),
+
+            serverHintLabel.topAnchor.constraint(equalTo: syncLoggingDescLabel.bottomAnchor, constant: 10),
             serverHintLabel.leadingAnchor.constraint(equalTo: serverTitleLabel.leadingAnchor),
             serverHintLabel.trailingAnchor.constraint(equalTo: serverTitleLabel.trailingAnchor),
 
@@ -526,6 +566,7 @@ class ConfigurationsViewController: UIViewController, UITextFieldDelegate {
         ServerConfiguration.replPort = replPort
         ServerConfiguration.agentPort = agentPort
         ServerConfiguration.logPort = logPort
+        ServerConfiguration.synchronousLogging = syncLoggingSwitch.isOn
 
         serverAddressField.text = ServerConfiguration.serverAddress
         replPortField.text = String(ServerConfiguration.replPort)
@@ -550,6 +591,10 @@ class ConfigurationsViewController: UIViewController, UITextFieldDelegate {
         setServerStatus(nil, color: Theme.textDim)
     }
 
+    @objc private func syncLoggingSwitchChanged() {
+        ServerConfiguration.synchronousLogging = syncLoggingSwitch.isOn
+    }
+
     @objc private func dismissKeyboard() {
         view.endEditing(true)
     }
@@ -561,6 +606,7 @@ class ConfigurationsViewController: UIViewController, UITextFieldDelegate {
         replPortField.text = String(ServerConfiguration.replPort)
         agentPortField.text = String(ServerConfiguration.agentPort)
         logPortField.text = String(ServerConfiguration.logPort)
+        syncLoggingSwitch.isOn = ServerConfiguration.synchronousLogging
         refreshServerHint()
         setServerStatus(nil, color: Theme.textDim)
     }
