@@ -789,6 +789,7 @@ function handleJobEvent(job) {
     return;
   }
   if (job.status === "completed") {
+    state.activeJobId = null;
     setBusy(false);
     resolveActiveJobToast(`Async job completed\n${job.jobId}`, "success");
     setRunMeta("Job completed");
@@ -797,6 +798,7 @@ function handleJobEvent(job) {
     return;
   }
   if (job.status === "failed" || job.status === "lost") {
+    state.activeJobId = null;
     setBusy(false);
     resolveActiveJobToast(`Async job ${job.status}\n${job.jobId}`, "error");
     setRunMeta(`Job ${job.status}`, "error");

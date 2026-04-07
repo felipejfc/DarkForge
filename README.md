@@ -143,15 +143,24 @@ docs/ARCHITECTURE.md       System design and execution model
 
 - macOS with Xcode installed
 - `xcodegen`
-- Python 3
-- `websockets` for the host server:
-
-```bash
-pip3 install websockets
-```
-
 - an authorized iOS test device
 - a signing setup that can build the chosen bundle ID
+
+> **Note:** If you installed the desktop app (Option 1 or `make desktop-build`),
+> the host server is bundled inside it and you do **not** need Python or any
+> extra dependencies. The Python prerequisites below are only required if you
+> want to run the standalone host server manually.
+>
+> <details><summary>Standalone server dependencies (optional)</summary>
+>
+> - Python 3
+> - `websockets`:
+>
+> ```bash
+> pip3 install websockets
+> ```
+>
+> </details>
 
 ### 2. Configure Local Signing
 
@@ -189,11 +198,16 @@ For normal signed device builds and deployment notes, see
 
 ### 5. Start The Host Server
 
+If you are using the **desktop app** (recommended), simply launch it — the host
+server starts automatically and no extra setup is needed. Skip to step 6.
+
+If you prefer to run the standalone Python server instead:
+
 ```bash
 python3 tools/kserver.py
 ```
 
-That host process provides:
+Either way, the host process provides:
 
 - WebSocket transport on `9090`
 - HTTP API on `9092`
