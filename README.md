@@ -277,6 +277,14 @@ DarkForge is not trying to be:
 - a compatibility layer for every iOS build and device class
 - a replacement for careful device-specific investigation
 
+## Known Issues
+
+- Sometimes the device panics and restarts if the DarkForge app is closed, even
+  after Agent injection.
+- Sometimes the exploit fails to execute and can crash the phone. If that
+  happens, simply force reboot and try again.
+- Some random crashes when running JS code that need further investigation.
+
 ## Contributing
 
 Contributions are most useful when they improve one of these areas:

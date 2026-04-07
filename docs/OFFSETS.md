@@ -14,9 +14,32 @@ same `DeviceProfile.resolve()` path:
 
 1. **Version-based seed**: sets base offsets from iOS version + CPU family.
 2. **Per-device table**: refines offsets for specific device families/models
-   (includes IDA-verified values like `kernelTask`, `proPid`, `ptovTableOffset`).
+   (includes IDA-verified values like `kernelTask` and `ptovTableOffset`).
 3. **Stable defaults**: offsets verified across iOS 17–26 have default values
    in the struct and are overridable if a future kernel changes them.
+
+Important resolution rule:
+
+- Per-device table entries are **cumulative by XNU minor**. A `24.3` target
+  inherits the `24.0` patch first, then applies the `24.3` delta. Do not treat
+  each minor patch as a complete replacement row.
+- Profile names are descriptive only. Do not key runtime behavior off
+  `DeviceProfile.name`; add a real field to `DeviceProfile` instead.
+
+Current explicit anchors:
+
+- iPhone: `iPhone17,4 / 22G86`
+- iPad: `iPad8,9 / 22D82`
+
+Coverage note:
+
+- `kernelTask` is the primary manual per-target blocker for new support in the
+  active exploit chain.
+- `procRO` and `procPName` are still important, but they are usually supplied by
+  the version seed unless a specific build needs an override.
+- `ptovTableOffset` and `physBaseStructOffset` belong to the dormant
+  `PhysTranslation` / `SandboxEscape` path. Keep them documented, but do not
+  treat them as blockers for the current VMShmem + JSCBridge flow.
 
 Forwarding enums in `Offsets.swift` and `PrivilegeEscalation.swift` expose
 these values under their original names so call sites stay unchanged.
@@ -41,10 +64,8 @@ These are the fields currently modeled in
 | `guardExcCode` | DarkSword seed | Guard exception injection and cleanup |
 | `guardExcCodeData` | DarkSword seed | Guard exception payload and cleanup |
 | `taskIpcSpace` | DarkSword seed | IPC space lookup and port forging |
-| `procRO` | Per-device (JSTable) | Task to proc lookup. **TODO per device** — reference does not provide this. |
+| `procRO` | Seed + per-device override | Task to proc lookup. Seed-backed for known version families; override when the target deviates. |
 | `excGuard` | DarkSword seed | `EXC_GUARD` delivery setup |
-| `proPid` | Per-device only | PID matching from proc_ro. **TODO per device** — reference does not provide this. |
-| `proComm` | Per-device (JSTable) | Process-name matching from proc_ro. **TODO per device** — reference does not provide this. |
 | `icmp6Filter` | DarkSword seed | Early PCB corruption and kRW bootstrap |
 | `socketSoCount` | DarkSword seed | Socket leak to keep kRW alive |
 | `ipcSpaceTable` | DarkSword seed | IPC table pointer decode |
@@ -62,7 +83,7 @@ These are the fields currently modeled in
 | `threadRoTroTask` | DarkSword seed | thread_ro→tro_task navigation |
 | `threadMachineUpcb` | DarkSword seed | thread→machine.upcb (user PCB) |
 | `threadMachineJopPid` | DarkSword seed | thread→machine.jop_pid (0xdeaddead on A10) |
-| `procPName` | DarkSword seed | proc→p_name (0x579/0x57d) |
+| `procPName` | DarkSword seed / per-device override | proc→p_name (0x579/0x57d) used for process-name matching |
 | `procPFd` | DarkSword seed | proc→p_fd (filedesc pointer) |
 | `procPFlag` | DarkSword seed | proc→p_flag |
 | `procPTextvp` | DarkSword seed | proc→p_textvp (text vnode) |
@@ -72,6 +93,10 @@ These are the fields currently modeled in
 | `labelSandbox` | DarkSword seed | label→l_perpolicy sandbox slot |
 
 ### Physical translation (per-device, manual)
+
+These fields are currently dormant. They are used only by the
+`PhysTranslation` / `SandboxEscape` path, which is not part of the active
+exploit/bootstrap flow.
 
 | Field | Source | Why |
 | --- | --- | --- |
@@ -122,10 +147,16 @@ For a new target:
 
 2. Manually find these per-device offsets (marked **TODO** above):
    - `kernelTask` — offset from kernel base to `kernel_task` global in __DATA
-   - `procRO` — task→proc_ro offset (varies per device/build)
-   - `proPid` — proc_ro→p_pid offset
-   - `proComm` — proc→p_comm or proc_ro→p_comm offset
-   - `ptovTableOffset` — kernel base to ptov_table (iPad) or 0 (iPhone)
-   - `physBaseStructOffset` — kernel base to SPTM physBase struct (iPhone) or 0 (iPad)
+   - `procRO` — only when the version seed is not valid for the target
+   - `procPName` — only when the version seed is not valid for the target
 
-3. Use the `find-ios-kernel-offsets` skill and IDA probe scripts for recovery.
+3. When adding a per-device row, only record the fields that actually differ.
+   Let cumulative patch merging inherit earlier verified values for the same
+   XNU major line.
+
+4. Use the `find-ios-kernel-offsets` skill and IDA probe scripts for recovery.
+
+If you are reviving the dormant `PhysTranslation` / `SandboxEscape` path, then
+also recover:
+- `ptovTableOffset`
+- `physBaseStructOffset`

@@ -11,6 +11,18 @@ Use this skill to recover or validate the offsets DarkForge actually uses in
 Do not copy reference tables blindly. Recover the offsets DarkForge consumes,
 prove them from the target kernelcache, and leave the unresolved ones blank.
 
+DarkForge's `DeviceProfile.resolve()` applies per-device patches cumulatively by
+XNU minor. Treat a `24.3` row as a delta on top of `24.0`, not as a full
+replacement. When you add a new patch row, only include fields that actually
+change on that minor.
+
+Known anchor targets in this repo:
+
+- iPhone `iPhone17,4 / 22G86`
+- iPad `iPad8,9 / 22D82`
+
+Use those as the baseline sanity check for field meaning and recovery patterns.
+
 ## Repo Inputs
 
 Use repo-relative paths so the skill is safe to keep in a public repository.
@@ -53,6 +65,8 @@ For a new target, produce:
 4. Treat proc/proc_ro and thread/thread_ro semantics as unstable until proven.
 5. `threadJopDisable` and `pacizaGadget` have been removed from DeviceProfile.
    Signing is now handled entirely by the PAC oracle. Do not recover these.
+6. Do not solve build-specific behavior by branching on `DeviceProfile.name`.
+   If DarkForge needs a per-target constant, add a real `DeviceProfile` field.
 
 ## Symbolication
 
@@ -116,7 +130,7 @@ IDAT="${IDAT:-idat}"
 ```
 
 For the hard cases, use the built-in immediate scan mode. Example: recover
-task-side `procRO` and proc-side `proComm` candidates from task/proc functions:
+task-side `procRO` and proc-side `procPName` candidates from task/proc functions:
 
 ```bash
 REPO=$(pwd)
@@ -134,8 +148,7 @@ IDAT="${IDAT:-idat}"
 That scan mode is especially useful for:
 
 - `procRO`
-- `proComm`
-- `proPid` candidate discovery
+- `procPName`
 - `threadOptions` when the obvious symbol names are missing
 
 ## Suggested Workflow
@@ -146,12 +159,31 @@ That scan mode is especially useful for:
    `kstackptr`, `threadCTID`, `threadAST`, `threadMutexData`,
    `guardExcCode`, `guardExcCodeData`, `taskIpcSpace`, `excGuard`,
    `icmp6Filter`, `socketSoCount`, `ipcSpaceTable`,
-   `threadOptions`, `ipcPortKObject`, `procRO`, `proComm`.
+   `threadOptions`, `ipcPortKObject`, `procRO`, `procPName`.
 4. Then recover the structurally trickier fields:
    `kernelTask`, `threadTRO`, `threadTaskThreads`,
-   `troPacRopPid`, `troPacJopPid`, `proPid`,
+   `troPacRopPid`, `troPacJopPid`,
    `ptovTableOffset`, `physBaseStructOffset`.
 5. Leave unresolved fields blank and note why.
+
+Practical priority:
+
+- Treat `kernelTask` as the main support blocker for a new target in the active
+  exploit chain.
+- Treat `procRO` and `procPName` as seed-backed fields first; only add explicit
+  overrides when the target kernelcache proves the seed is wrong.
+- Treat `ptovTableOffset` and `physBaseStructOffset` as dormant-path fields for
+  `PhysTranslation` / `SandboxEscape`, not as blockers for the current VMShmem +
+  JSCBridge flow.
+
+## Output Expectations
+
+When proposing a new target update, report:
+
+1. Which fields belong in the version seed versus the per-device patch table.
+2. Which fields are inherited from an earlier XNU-minor patch row.
+3. Which fields need a new `DeviceProfile` property because call sites should
+   consume data, not infer behavior from a profile name.
 
 ## References
 
