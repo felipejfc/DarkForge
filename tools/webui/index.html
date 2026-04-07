@@ -11,6 +11,7 @@
     <header class="topbar">
       <div class="topbar-left">
         <span class="brand">DarkForge</span>
+        <span class="brand-version">v0.1.0</span>
         <nav class="nav" role="tablist">
           <button id="navSkills" class="nav-tab is-active" type="button" role="tab" aria-selected="true">Skills</button>
           <button id="navEditor" class="nav-tab" type="button" role="tab" aria-selected="false">Editor</button>
@@ -19,6 +20,12 @@
         </nav>
       </div>
       <div class="topbar-right">
+        <label class="target-selector">
+          <span class="target-label">Device</span>
+          <select id="deviceSelect">
+            <option value="" disabled selected>No devices</option>
+          </select>
+        </label>
         <label class="target-selector">
           <span class="target-label">Target</span>
           <select id="targetSelect">
@@ -169,6 +176,8 @@
           <button id="fileNewFileButton" class="btn btn-secondary btn-sm" type="button">New File</button>
           <button id="fileUploadButton" class="btn btn-primary btn-sm" type="button">Upload</button>
           <input id="fileUploadInput" type="file" multiple hidden>
+          <button id="filePasteButton" class="btn btn-ghost btn-sm" type="button" disabled>Paste</button>
+          <button id="fileNewLinkButton" class="btn btn-secondary btn-sm" type="button">New Link</button>
           <span class="toolbar-sep"></span>
           <span id="fileStatus" class="run-meta">Idle</span>
         </div>
@@ -199,6 +208,13 @@
           <div id="uploadProgress" class="upload-progress" hidden>
             <div class="upload-progress-label" id="uploadProgressLabel">Uploading...</div>
             <div class="upload-progress-bar"><div class="upload-progress-fill" id="uploadProgressFill"></div></div>
+          </div>
+          <div id="fileBulkBar" class="file-bulk-bar" hidden>
+            <span id="fileBulkCount" class="file-bulk-count"></span>
+            <button id="fileBulkCopy" class="btn btn-ghost btn-sm" type="button">Copy</button>
+            <button id="fileBulkCut" class="btn btn-ghost btn-sm" type="button">Cut</button>
+            <button id="fileBulkDelete" class="btn btn-ghost btn-sm btn-danger" type="button">Delete</button>
+            <button id="fileBulkDeselect" class="btn btn-ghost btn-sm" type="button">Deselect</button>
           </div>
           <div id="fileList" class="file-list" tabindex="0"></div>
         </section>
@@ -240,6 +256,11 @@
       <button class="context-menu-item" data-action="open" type="button">Open</button>
       <button class="context-menu-item" data-action="copypath" type="button">Copy Path</button>
       <button class="context-menu-item" data-action="download" type="button">Download</button>
+      <hr class="context-menu-sep">
+      <button class="context-menu-item" data-action="copy" type="button">Copy</button>
+      <button class="context-menu-item" data-action="cut" type="button">Cut</button>
+      <button class="context-menu-item" data-action="moveto" type="button">Move to&hellip;</button>
+      <button class="context-menu-item" data-action="permissions" type="button">Permissions</button>
       <hr class="context-menu-sep">
       <button class="context-menu-item" data-action="rename" type="button">Rename</button>
       <button class="context-menu-item" data-action="delete" type="button">Delete</button>

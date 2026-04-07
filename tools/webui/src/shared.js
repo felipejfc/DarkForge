@@ -20,6 +20,8 @@ export const state = {
   fileSortAsc: true,
   fileFilter: "",
   fileFocusIndex: -1,
+  fileClipboard: null,
+  fileMultiSelect: [],
   serverLogs: [],
   activeConsoleTab: "result",
   consoleOpen: false,
@@ -35,6 +37,7 @@ export const state = {
   activeJobToast: null,
   jobs: {},
   eventSource: null,
+  devices: [],
 };
 
 export const els = {
@@ -89,6 +92,7 @@ export const els = {
   statusDot: document.querySelector("#statusDot"),
   statusLabel: document.querySelector("#statusLabel"),
   targetSelect: document.querySelector("#targetSelect"),
+  deviceSelect: document.querySelector("#deviceSelect"),
   fileRootButton: document.querySelector("#fileRootButton"),
   fileUpButton: document.querySelector("#fileUpButton"),
   fileRefreshButton: document.querySelector("#fileRefreshButton"),
@@ -123,6 +127,14 @@ export const els = {
   fileSaveButton: document.querySelector("#fileSaveButton"),
   fileItemTemplate: document.querySelector("#fileItemTemplate"),
   fileContextMenu: document.querySelector("#fileContextMenu"),
+  filePasteButton: document.querySelector("#filePasteButton"),
+  fileNewLinkButton: document.querySelector("#fileNewLinkButton"),
+  fileBulkBar: document.querySelector("#fileBulkBar"),
+  fileBulkCount: document.querySelector("#fileBulkCount"),
+  fileBulkCopy: document.querySelector("#fileBulkCopy"),
+  fileBulkCut: document.querySelector("#fileBulkCut"),
+  fileBulkDelete: document.querySelector("#fileBulkDelete"),
+  fileBulkDeselect: document.querySelector("#fileBulkDeselect"),
   runModal: document.querySelector("#runModal"),
   runModalTitle: document.querySelector("#runModalTitle"),
   runModalBody: document.querySelector("#runModalBody"),
@@ -324,20 +336,64 @@ export function confirmAction({
   });
 }
 
-export function setStatus(status, onDisconnect = null) {
+export function setStatus(status, { onDisconnect, onConnectionChange } = {}) {
+  const wasConnected = state.connected;
   state.connected = Boolean(status.connected);
   state.appConnected = Boolean(status.appConnected);
   state.launchdAgentConnected = Boolean(status.launchdAgentConnected);
   state.launchdWorkerReady = Boolean(status.launchdWorkerReady);
+  state.devices = status.devices || [];
   els.statusDot.classList.toggle("online", state.connected);
   els.statusDot.classList.toggle("offline", !state.connected);
-  if (state.launchdAgentConnected) {
-    els.statusLabel.textContent = status.activeJobs ? `Agent live · ${status.activeJobs} jobs` : "Agent live";
+
+  // Update device selector dropdown
+  const connectedDevices = state.devices.filter(d => d.connected);
+  const reconnectingDevices = state.devices.filter(d => d.reconnecting);
+  if (els.deviceSelect) {
+    const currentValue = els.deviceSelect.value;
+    const availableDevices = state.devices.filter(d => d.connected || d.reconnecting);
+    els.deviceSelect.innerHTML = "";
+    if (availableDevices.length === 0) {
+      const placeholder = document.createElement("option");
+      placeholder.value = "";
+      placeholder.disabled = true;
+      placeholder.selected = true;
+      placeholder.textContent = "No devices";
+      els.deviceSelect.append(placeholder);
+    }
+    for (const device of availableDevices) {
+      const opt = document.createElement("option");
+      opt.value = device.deviceId;
+      const suffix = device.reconnecting ? " (reconnecting)" : "";
+      opt.textContent = device.deviceName + suffix;
+      els.deviceSelect.append(opt);
+    }
+    // Restore previous selection if still available, otherwise auto-select first
+    if (availableDevices.some(d => d.deviceId === currentValue)) {
+      els.deviceSelect.value = currentValue;
+    } else if (availableDevices.length > 0) {
+      els.deviceSelect.value = availableDevices[0].deviceId;
+    }
+  }
+
+  // Update status label
+  if (connectedDevices.length > 1) {
+    els.statusLabel.textContent = status.activeJobs
+      ? `${connectedDevices.length} devices · ${status.activeJobs} jobs`
+      : `${connectedDevices.length} devices live`;
+  } else if (connectedDevices.length === 1) {
+    const name = connectedDevices[0].deviceName;
+    els.statusLabel.textContent = status.activeJobs
+      ? `${name} · ${status.activeJobs} jobs`
+      : `${name} live`;
+  } else if (reconnectingDevices.length > 0) {
+    els.statusLabel.textContent = "Device reconnecting\u2026";
   } else if (state.appConnected) {
     els.statusLabel.textContent = "App bridge only";
   } else {
     els.statusLabel.textContent = "Waiting for device";
   }
+
   const details = [
     status.transport ? `transport ${status.transport}` : null,
     status.pid ? `pid ${status.pid}` : null,
@@ -351,6 +407,7 @@ export function setStatus(status, onDisconnect = null) {
     if (opt.value === "bridge") opt.disabled = !state.appConnected;
   }
   if (!state.connected && onDisconnect) onDisconnect();
+  if (wasConnected !== state.connected && onConnectionChange) onConnectionChange();
 }
 
 export function setBusy(nextBusy) {
@@ -507,10 +564,11 @@ export async function requestJson(url, options = {}) {
   return data;
 }
 
-export async function refreshStatus(onDisconnect = null) {
+export async function refreshStatus(callbacks = {}) {
+  const opts = typeof callbacks === "function" ? { onDisconnect: callbacks } : callbacks;
   try {
     const status = await requestJson("/api/status", { headers: {} });
-    setStatus(status, onDisconnect);
+    setStatus(status, opts);
     return status;
   } catch {
     const offline = {
@@ -520,7 +578,7 @@ export async function refreshStatus(onDisconnect = null) {
       launchdWorkerReady: false,
       activeJobs: 0,
     };
-    setStatus(offline, onDisconnect);
+    setStatus(offline, opts);
     setRunMeta("Status unavailable");
     return offline;
   }
@@ -535,12 +593,12 @@ export async function refreshServerLogs() {
   }
 }
 
-export function connectEventStream({ onJob, onDisconnect } = {}) {
+export function connectEventStream({ onJob, onDisconnect, onConnectionChange } = {}) {
   if (state.eventSource) state.eventSource.close();
   const source = new EventSource("/api/events");
   source.addEventListener("status", (event) => {
     try {
-      setStatus(JSON.parse(event.data), onDisconnect);
+      setStatus(JSON.parse(event.data), { onDisconnect, onConnectionChange });
     } catch {}
   });
   source.addEventListener("job", (event) => {

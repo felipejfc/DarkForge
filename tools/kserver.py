@@ -62,6 +62,7 @@ EXEC_TIMEOUT = 60  # seconds per exec command
 CONNECT_TIMEOUT = 120  # seconds to wait for initial connection
 AGENT_PING_INTERVAL = 10  # seconds between heartbeat pings
 AGENT_PONG_TIMEOUT = 25  # seconds without inbound agent traffic before eviction
+AGENT_RECONNECT_GRACE = 30  # seconds to wait for device reconnection before marking jobs lost
 TOOLS_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = TOOLS_DIR.parent
 
@@ -116,6 +117,65 @@ class AgentJobWorkerConnection:
         self.active_jobs: set[str] = set()
         self.last_seen_monotonic: float | None = None
         self.last_pong_at: str | None = None
+
+
+class DeviceState:
+    """Per-device agent state.  One instance per connected (or recently-disconnected) device."""
+
+    def __init__(self, device_id: str, device_name: str):
+        self.device_id = device_id
+        self.device_name = device_name
+        self.reader: asyncio.StreamReader | None = None
+        self.writer: asyncio.StreamWriter | None = None
+        self.connected = asyncio.Event()
+        self.role: str | None = None
+        self.host: str | None = None
+        self.pid: int | None = None
+        self.heartbeat_task: asyncio.Task | None = None
+        self.last_seen_monotonic: float | None = None
+        self.last_pong_at: str | None = None
+        self.worker_ready: bool = False
+        self.supports_bulk: bool = False
+        self.supports_async: bool = False
+        self.inline_limit: int | None = None
+        self.bulk_chunk_size: int | None = None
+        self.bulk_max: int | None = None
+        self.send_lock = asyncio.Lock()
+        self.job_workers: dict[str, AgentJobWorkerConnection] = {}
+        self.active_jobs: set[str] = set()
+        # Grace period for reconnection
+        self.disconnect_time: float | None = None
+        self.grace_task: asyncio.Task | None = None
+
+    def reset(self):
+        if self.heartbeat_task and not self.heartbeat_task.done():
+            self.heartbeat_task.cancel()
+        if self.grace_task and not self.grace_task.done():
+            self.grace_task.cancel()
+        self.reader = None
+        self.writer = None
+        self.role = None
+        self.host = None
+        self.pid = None
+        self.heartbeat_task = None
+        self.last_seen_monotonic = None
+        self.last_pong_at = None
+        self.worker_ready = False
+        self.supports_bulk = False
+        self.supports_async = False
+        self.inline_limit = None
+        self.bulk_chunk_size = None
+        self.bulk_max = None
+        self.connected.clear()
+        self.disconnect_time = None
+        self.grace_task = None
+        for worker in self.job_workers.values():
+            try:
+                worker.writer.close()
+            except Exception:
+                pass
+        self.job_workers.clear()
+        self.active_jobs.clear()
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -278,27 +338,13 @@ class ServerState:
         self.disconnected = asyncio.Event()
         self.pending: dict[str, asyncio.Future] = {}
         self.bulk_pending: dict[str, dict] = {}
-        self.agent_reader: asyncio.StreamReader | None = None
-        self.agent_writer: asyncio.StreamWriter | None = None
-        self.agent_pending: dict[str, asyncio.Future] = {}
-        self.agent_bulk_pending: dict[str, dict] = {}
-        self.agent_connected = asyncio.Event()
-        self.agent_role: str | None = None
-        self.agent_host: str | None = None
-        self.agent_pid: int | None = None
+        # Multi-device agent state
+        self.devices: dict[str, DeviceState] = {}
+        self.default_device_id: str | None = None
+        self.agent_connected = asyncio.Event()  # set if ANY device is connected
+        self.agent_pending: dict[str, asyncio.Future] = {}  # global: msg_ids are UUIDs
+        self.agent_bulk_pending: dict[str, dict] = {}  # global: msg_ids are UUIDs
         self.agent_bootstrap_task: asyncio.Task | None = None
-        self.agent_heartbeat_task: asyncio.Task | None = None
-        self.agent_last_seen_monotonic: float | None = None
-        self.agent_last_pong_at: str | None = None
-        self.agent_worker_ready: bool = False
-        self.agent_supports_bulk: bool = False
-        self.agent_supports_async: bool = False
-        self.agent_inline_limit: int | None = None
-        self.agent_bulk_chunk_size: int | None = None
-        self.agent_bulk_max: int | None = None
-        self.agent_send_lock = asyncio.Lock()
-        self.agent_job_workers: dict[str, AgentJobWorkerConnection] = {}
-        self.agent_active_jobs: set[str] = set()
         self.server_url: str | None = None
         self.server_address: str | None = None
         self.browser_clients: set[asyncio.StreamWriter] = set()
@@ -326,39 +372,21 @@ class ServerState:
         self._refresh_connectivity()
 
     def reset_agent(self):
-        if self.agent_heartbeat_task and not self.agent_heartbeat_task.done():
-            self.agent_heartbeat_task.cancel()
-        self.agent_reader = None
-        self.agent_writer = None
-        self.agent_role = None
-        self.agent_host = None
-        self.agent_pid = None
-        self.agent_heartbeat_task = None
-        self.agent_last_seen_monotonic = None
-        self.agent_last_pong_at = None
-        self.agent_worker_ready = False
-        self.agent_supports_bulk = False
-        self.agent_supports_async = False
-        self.agent_inline_limit = None
-        self.agent_bulk_chunk_size = None
-        self.agent_bulk_max = None
+        for device in list(self.devices.values()):
+            device.reset()
+        self.devices.clear()
+        self.default_device_id = None
         self.agent_connected.clear()
-        for worker in self.agent_job_workers.values():
-            try:
-                worker.writer.close()
-            except Exception:
-                pass
-        self.agent_job_workers.clear()
         for fut in self.agent_pending.values():
             if not fut.done():
                 fut.set_exception(ConnectionError("Agent disconnected"))
         self.agent_pending.clear()
         self.agent_bulk_pending.clear()
-        self.agent_active_jobs.clear()
         self._refresh_connectivity()
 
     def _refresh_connectivity(self):
-        if (self.ws is not None and self.ready.is_set()) or self.agent_connected.is_set():
+        any_agent = any(d.writer is not None and d.connected.is_set() for d in self.devices.values())
+        if (self.ws is not None and self.ready.is_set()) or any_agent:
             self.connected.set()
             self.disconnected.clear()
         else:
@@ -625,11 +653,19 @@ async def _send_agent_frame(
     *,
     writer: asyncio.StreamWriter | None = None,
     send_lock: asyncio.Lock | None = None,
+    device_id: str | None = None,
 ):
-    target_writer = writer or state.agent_writer
-    target_lock = send_lock or state.agent_send_lock
+    target_writer = writer
+    target_lock = send_lock
+    if not target_writer:
+        dev = _get_device(device_id)
+        if dev:
+            target_writer = dev.writer
+            target_lock = dev.send_lock
     if not target_writer:
         raise ConnectionError("launchd agent is not connected")
+    if not target_lock:
+        target_lock = asyncio.Lock()
     raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     frame = len(raw).to_bytes(4, "big") + raw
     async with target_lock:
@@ -639,20 +675,22 @@ async def _send_agent_frame(
         await target_writer.drain()
 
 
-def _pick_job_worker() -> AgentJobWorkerConnection | None:
-    if not state.agent_job_workers:
+def _pick_job_worker(device_id: str | None = None) -> AgentJobWorkerConnection | None:
+    dev = _get_device(device_id)
+    if not dev or not dev.job_workers:
         return None
     return min(
-        state.agent_job_workers.values(),
+        dev.job_workers.values(),
         key=lambda worker: (len(worker.active_jobs), worker.worker_id),
     )
 
 
-async def _mark_jobs_lost(job_ids: list[str], reason: str):
+async def _mark_jobs_lost(job_ids: list[str], reason: str, device: DeviceState | None = None):
     if not job_ids:
         return
     for job_id in job_ids:
-        state.agent_active_jobs.discard(job_id)
+        if device:
+            device.active_jobs.discard(job_id)
         job = _upsert_job(
             job_id,
             status="lost",
@@ -663,21 +701,44 @@ async def _mark_jobs_lost(job_ids: list[str], reason: str):
     await _emit_status_event()
 
 
-async def _agent_heartbeat_loop(writer: asyncio.StreamWriter):
+async def _device_grace_handler(device_id: str):
+    """Wait for device to reconnect; if it doesn't, mark jobs lost and remove device."""
+    try:
+        await asyncio.sleep(AGENT_RECONNECT_GRACE)
+    except asyncio.CancelledError:
+        return  # Device reconnected — grace cancelled
+    dev = state.devices.get(device_id)
+    if not dev:
+        return
+    if dev.writer is not None:
+        return  # Reconnected while we were sleeping
+    _log(f"DEVICE GRACE EXPIRED: {device_id} — marking {len(dev.active_jobs)} jobs lost")
+    lost_jobs = list(dev.active_jobs)
+    dev.reset()
+    state.devices.pop(device_id, None)
+    if state.default_device_id == device_id:
+        state.default_device_id = next((d.device_id for d in state.devices.values() if d.writer is not None), None)
+    state._refresh_connectivity()
+    if not any(d.writer is not None for d in state.devices.values()):
+        state.agent_connected.clear()
+    await _mark_jobs_lost(lost_jobs, f"Device {device_id} did not reconnect within {AGENT_RECONNECT_GRACE}s")
+
+
+async def _agent_heartbeat_loop(device: DeviceState, writer: asyncio.StreamWriter):
     try:
         while True:
             await asyncio.sleep(AGENT_PING_INTERVAL)
-            if state.agent_writer is not writer:
+            if device.writer is not writer:
                 return
 
-            last_seen = state.agent_last_seen_monotonic or time.monotonic()
+            last_seen = device.last_seen_monotonic or time.monotonic()
             idle_for = time.monotonic() - last_seen
             if idle_for > AGENT_PONG_TIMEOUT:
-                if state.agent_pending or state.agent_bulk_pending or state.agent_active_jobs:
-                    _log(f"AGENT HEARTBEAT BUSY-SUPPRESS idle={idle_for:.1f}s pending={len(state.agent_pending)} bulk={len(state.agent_bulk_pending)} jobs={len(state.agent_active_jobs)}")
+                if state.agent_pending or state.agent_bulk_pending or device.active_jobs:
+                    _log(f"AGENT HEARTBEAT BUSY-SUPPRESS device={device.device_id} idle={idle_for:.1f}s pending={len(state.agent_pending)} bulk={len(state.agent_bulk_pending)} jobs={len(device.active_jobs)}")
                     continue
-                _print_status(f"\n[-] launchd agent heartbeat timed out after {idle_for:.1f}s")
-                _log(f"AGENT HEARTBEAT TIMEOUT after {idle_for:.1f}s")
+                _print_status(f"\n[-] device {device.device_id} heartbeat timed out after {idle_for:.1f}s")
+                _log(f"AGENT HEARTBEAT TIMEOUT device={device.device_id} after {idle_for:.1f}s")
                 try:
                     writer.close()
                     await writer.wait_closed()
@@ -688,12 +749,12 @@ async def _agent_heartbeat_loop(writer: asyncio.StreamWriter):
             await _send_agent_frame({
                 "type": "ping",
                 "ts": _utc_now_iso(),
-            })
+            }, writer=writer, send_lock=device.send_lock)
     except asyncio.CancelledError:
         return
     except Exception as error:
-        _log(f"AGENT HEARTBEAT ERROR: {error}")
-        if state.agent_writer is writer:
+        _log(f"AGENT HEARTBEAT ERROR device={device.device_id}: {error}")
+        if device.writer is writer:
             try:
                 writer.close()
                 await writer.wait_closed()
@@ -767,8 +828,12 @@ async def _exec_via_app_ws(code: str, timeout: float, runtime: str | None = None
     return await _send_app_message(message, timeout=timeout)
 
 
-async def _exec_via_agent(code: str, timeout: float) -> dict | None:
-    if not _has_agent_runtime():
+async def _exec_via_agent(code: str, timeout: float, device_id: str | None = None) -> dict | None:
+    if not _has_agent_runtime(device_id):
+        return None
+
+    dev = _get_device(device_id)
+    if not dev or not dev.writer:
         return None
 
     msg_id = str(uuid.uuid4())
@@ -777,7 +842,7 @@ async def _exec_via_agent(code: str, timeout: float) -> dict | None:
     state.agent_pending[msg_id] = fut
 
     try:
-        await _send_agent_frame({"type": "exec", "id": msg_id, "code": code})
+        await _send_agent_frame({"type": "exec", "id": msg_id, "code": code}, writer=dev.writer, send_lock=dev.send_lock)
         return await asyncio.wait_for(fut, timeout=timeout)
     except asyncio.TimeoutError:
         state.agent_pending.pop(msg_id, None)
@@ -798,20 +863,22 @@ async def exec_code(
     *,
     prefer_agent: bool = True,
     target: str | None = None,
+    device_id: str | None = None,
     library_dependencies: list[str] | None = None,
 ) -> dict | None:
     """Send code to the preferred device runtime and wait for the result.
 
     target: "agent" forces launchd agent, "bridge" forces app WebSocket,
             None / "auto" uses the default prefer_agent heuristic.
+    device_id: target a specific device (agent only).
     """
     prepared_code = code
     if (runtime or DEFAULT_SKILL_RUNTIME) == DEFAULT_SKILL_RUNTIME:
         prepared_code = package_manager.preprocess_code(code, library_dependencies=library_dependencies)
 
     if target == "agent":
-        if _has_agent_runtime():
-            return await _exec_via_agent(prepared_code, timeout)
+        if _has_agent_runtime(device_id):
+            return await _exec_via_agent(prepared_code, timeout, device_id=device_id)
         _print_error("launchd agent is not connected.")
         return None
     if target == "bridge":
@@ -820,21 +887,26 @@ async def exec_code(
         _print_error("App bridge is not connected.")
         return None
     # Auto: original heuristic
-    if prefer_agent and runtime == DEFAULT_SKILL_RUNTIME and _has_agent_runtime():
-        return await _exec_via_agent(prepared_code, timeout)
+    if prefer_agent and runtime == DEFAULT_SKILL_RUNTIME and _has_agent_runtime(device_id):
+        return await _exec_via_agent(prepared_code, timeout, device_id=device_id)
     if _has_app_runtime():
         return await _exec_via_app_ws(prepared_code, timeout, runtime=runtime)
-    if _has_agent_runtime():
-        return await _exec_via_agent(prepared_code, timeout)
+    if _has_agent_runtime(device_id):
+        return await _exec_via_agent(prepared_code, timeout, device_id=device_id)
     _print_error("Not connected to device.")
     return None
 
 
 async def _submit_job_to_agent(job: dict):
+    device_id = job.get("deviceId")
     if not await _ensure_remote_agent_ready():
         raise ConnectionError("launchd agent is not connected")
-    worker = _pick_job_worker()
-    state.agent_active_jobs.add(job["jobId"])
+    dev = _get_device(device_id)
+    if not dev or not dev.writer:
+        raise ConnectionError("launchd agent is not connected")
+    worker = _pick_job_worker(dev.device_id)
+    dev.active_jobs.add(job["jobId"])
+    job["deviceId"] = dev.device_id
     payload = {
         "type": "job_submit",
         "jobId": job["jobId"],
@@ -851,11 +923,11 @@ async def _submit_job_to_agent(job: dict):
             return
 
         job["workerId"] = "primary"
-        await _send_agent_frame(payload)
+        await _send_agent_frame(payload, writer=dev.writer, send_lock=dev.send_lock)
     except Exception:
         if worker is not None:
             worker.active_jobs.discard(job["jobId"])
-        state.agent_active_jobs.discard(job["jobId"])
+        dev.active_jobs.discard(job["jobId"])
         raise
 
 
@@ -916,19 +988,39 @@ async def _handle_agent_message(
 ):
     msg_type = msg.get("type")
     now = time.monotonic()
+    device_id = connection_info.get("device_id")
+    device: DeviceState | None = state.devices.get(device_id) if device_id else None
+
     if connection_info.get("kind") == "job-worker":
-        worker = state.agent_job_workers.get(connection_info.get("worker_id", ""))
-        if worker and worker.writer is writer:
-            worker.last_seen_monotonic = now
-    else:
-        state.agent_last_seen_monotonic = now
+        if device:
+            worker = device.job_workers.get(connection_info.get("worker_id", ""))
+            if worker and worker.writer is writer:
+                worker.last_seen_monotonic = now
+    elif device:
+        device.last_seen_monotonic = now
+
     if msg_type == "hello":
         role = str(msg.get("role") or "launchd-agent")
         worker_id = str(msg.get("workerId") or "").strip()
+        hello_device_id = str(msg.get("deviceId") or "").strip()
+        hello_device_name = str(msg.get("deviceName") or "").strip()
+        remote = writer.get_extra_info("peername")
+
+        # Fallback device ID for legacy clients
+        if not hello_device_id:
+            hello_device_id = f"legacy-{remote[0]}" if remote else f"legacy-{uuid.uuid4()}"
+        if not hello_device_name:
+            hello_device_name = hello_device_id
+
         if role == "native-agent-job-worker":
+            # Job worker — associate with its device
+            dev = state.devices.get(hello_device_id)
+            if not dev:
+                dev = DeviceState(hello_device_id, hello_device_name)
+                state.devices[hello_device_id] = dev
             if not worker_id:
                 worker_id = f"worker-{uuid.uuid4()}"
-            existing = state.agent_job_workers.get(worker_id)
+            existing = dev.job_workers.get(worker_id)
             if existing and existing.writer is not writer:
                 try:
                     existing.writer.close()
@@ -938,51 +1030,74 @@ async def _handle_agent_message(
             worker = AgentJobWorkerConnection(worker_id, reader, writer, role)
             worker.last_seen_monotonic = now
             worker.last_pong_at = _utc_now_iso()
-            state.agent_job_workers[worker_id] = worker
+            dev.job_workers[worker_id] = worker
             connection_info["kind"] = "job-worker"
             connection_info["worker_id"] = worker_id
+            connection_info["device_id"] = hello_device_id
             await _emit_status_event()
             return
 
-        state.agent_role = role
-        state.agent_host = str(writer.get_extra_info("peername") or "launchd-agent")
-        state.agent_pid = msg.get("pid")
-        state.agent_worker_ready = bool(msg.get("workerReady", False))
-        state.agent_supports_bulk = bool(msg.get("supportsBulk", False))
-        state.agent_supports_async = bool(msg.get("supportsAsync", False))
-        state.agent_inline_limit = int(msg.get("inlineLimit", 0) or 0) or None
-        state.agent_bulk_chunk_size = int(msg.get("bulkChunkSize", 0) or 0) or None
-        state.agent_bulk_max = int(msg.get("bulkMax", 0) or 0) or None
-        state.agent_last_pong_at = _utc_now_iso()
-        if state.agent_writer is not None and state.agent_writer is not writer:
-            try:
-                state.agent_writer.close()
-                await state.agent_writer.wait_closed()
-            except Exception:
-                pass
-        state.agent_reader = reader
-        state.agent_writer = writer
-        if state.agent_heartbeat_task and not state.agent_heartbeat_task.done():
-            state.agent_heartbeat_task.cancel()
-        state.agent_heartbeat_task = asyncio.create_task(_agent_heartbeat_loop(writer))
+        # Primary agent connection
+        dev = state.devices.get(hello_device_id)
+        if dev:
+            # Same device reconnecting — cancel grace period if active
+            if dev.grace_task and not dev.grace_task.done():
+                dev.grace_task.cancel()
+                dev.grace_task = None
+                dev.disconnect_time = None
+                _log(f"DEVICE RECONNECTED within grace period: {hello_device_id}")
+            # Close old writer if different connection (same device, stale socket)
+            if dev.writer is not None and dev.writer is not writer:
+                try:
+                    dev.writer.close()
+                    await dev.writer.wait_closed()
+                except Exception:
+                    pass
+        else:
+            dev = DeviceState(hello_device_id, hello_device_name)
+            state.devices[hello_device_id] = dev
+
+        dev.device_name = hello_device_name
+        dev.role = role
+        dev.host = str(remote or "launchd-agent")
+        dev.pid = msg.get("pid")
+        dev.worker_ready = bool(msg.get("workerReady", False))
+        dev.supports_bulk = bool(msg.get("supportsBulk", False))
+        dev.supports_async = bool(msg.get("supportsAsync", False))
+        dev.inline_limit = int(msg.get("inlineLimit", 0) or 0) or None
+        dev.bulk_chunk_size = int(msg.get("bulkChunkSize", 0) or 0) or None
+        dev.bulk_max = int(msg.get("bulkMax", 0) or 0) or None
+        dev.last_pong_at = _utc_now_iso()
+        dev.reader = reader
+        dev.writer = writer
+        if dev.heartbeat_task and not dev.heartbeat_task.done():
+            dev.heartbeat_task.cancel()
+        dev.heartbeat_task = asyncio.create_task(_agent_heartbeat_loop(dev, writer))
+        dev.connected.set()
+        dev.last_seen_monotonic = now
+        if state.default_device_id is None:
+            state.default_device_id = hello_device_id
         state.agent_connected.set()
         state._refresh_connectivity()
         connection_info["kind"] = "primary"
+        connection_info["device_id"] = hello_device_id
+        _log(f"DEVICE REGISTERED: {hello_device_id} ({hello_device_name}) from {remote}")
         await _emit_status_event()
         return
 
     if msg_type == "pong":
         if connection_info.get("kind") == "job-worker":
-            worker = state.agent_job_workers.get(connection_info.get("worker_id", ""))
-            if worker and worker.writer is writer:
-                worker.last_pong_at = str(msg.get("ts") or _utc_now_iso())
-        else:
-            state.agent_last_pong_at = str(msg.get("ts") or _utc_now_iso())
+            if device:
+                worker = device.job_workers.get(connection_info.get("worker_id", ""))
+                if worker and worker.writer is writer:
+                    worker.last_pong_at = str(msg.get("ts") or _utc_now_iso())
+        elif device:
+            device.last_pong_at = str(msg.get("ts") or _utc_now_iso())
         return
 
     if msg_type == "ping":
-        if connection_info.get("kind") == "job-worker":
-            worker = state.agent_job_workers.get(connection_info.get("worker_id", ""))
+        if connection_info.get("kind") == "job-worker" and device:
+            worker = device.job_workers.get(connection_info.get("worker_id", ""))
             if worker and worker.writer is writer:
                 await _send_agent_frame({"type": "pong", "ts": _utc_now_iso()}, writer=worker.writer, send_lock=worker.send_lock)
                 return
@@ -1029,11 +1144,12 @@ async def _handle_agent_message(
         return
 
     if msg_type == "job_result":
-        if connection_info.get("kind") == "job-worker":
-            worker = state.agent_job_workers.get(connection_info.get("worker_id", ""))
+        if connection_info.get("kind") == "job-worker" and device:
+            worker = device.job_workers.get(connection_info.get("worker_id", ""))
             if worker and worker.writer is writer:
                 worker.active_jobs.discard(job_id)
-        state.agent_active_jobs.discard(job_id)
+        if device:
+            device.active_jobs.discard(job_id)
         job = _upsert_job(
             job_id,
             status=msg.get("status", "completed"),
@@ -1047,11 +1163,12 @@ async def _handle_agent_message(
         return
 
     if msg_type == "job_error":
-        if connection_info.get("kind") == "job-worker":
-            worker = state.agent_job_workers.get(connection_info.get("worker_id", ""))
+        if connection_info.get("kind") == "job-worker" and device:
+            worker = device.job_workers.get(connection_info.get("worker_id", ""))
             if worker and worker.writer is writer:
                 worker.active_jobs.discard(job_id)
-        state.agent_active_jobs.discard(job_id)
+        if device:
+            device.active_jobs.discard(job_id)
         job = _upsert_job(
             job_id,
             status=msg.get("status", "failed"),
@@ -1066,7 +1183,7 @@ async def _agent_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWri
     remote = writer.get_extra_info("peername")
     _print_status(f"\n[+] launchd agent connected from {remote}")
     _log(f"AGENT CONNECTED from {remote}")
-    connection_info = {"kind": None, "worker_id": None}
+    connection_info = {"kind": None, "worker_id": None, "device_id": None}
 
     try:
         while True:
@@ -1082,17 +1199,32 @@ async def _agent_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWri
         _print_error(f"\nAgent connection error: {e}")
         _log(f"AGENT CONNECTION ERROR: {e}")
     finally:
-        if connection_info.get("kind") == "job-worker":
+        device_id = connection_info.get("device_id")
+        dev = state.devices.get(device_id) if device_id else None
+
+        if connection_info.get("kind") == "job-worker" and dev:
             worker_id = connection_info.get("worker_id")
-            worker = state.agent_job_workers.get(worker_id or "")
+            worker = dev.job_workers.get(worker_id or "")
             if worker and worker.writer is writer:
                 lost_jobs = list(worker.active_jobs)
-                state.agent_job_workers.pop(worker_id, None)
-                await _mark_jobs_lost(lost_jobs, f"Job worker {worker_id} disconnected")
-        elif state.agent_writer is writer:
-            lost_jobs = list(state.agent_active_jobs)
-            state.reset_agent()
-            await _mark_jobs_lost(lost_jobs, "launchd agent disconnected")
+                dev.job_workers.pop(worker_id, None)
+                await _mark_jobs_lost(lost_jobs, f"Job worker {worker_id} disconnected", device=dev)
+        elif dev and dev.writer is writer:
+            # Primary connection lost — start grace period instead of immediately marking jobs lost
+            _log(f"DEVICE DISCONNECTED: {device_id} — starting {AGENT_RECONNECT_GRACE}s grace period for {len(dev.active_jobs)} active jobs")
+            if dev.heartbeat_task and not dev.heartbeat_task.done():
+                dev.heartbeat_task.cancel()
+            dev.heartbeat_task = None
+            dev.writer = None
+            dev.reader = None
+            dev.connected.clear()
+            dev.disconnect_time = time.monotonic()
+            if dev.grace_task and not dev.grace_task.done():
+                dev.grace_task.cancel()
+            dev.grace_task = asyncio.create_task(_device_grace_handler(device_id))
+            if not any(d.writer is not None for d in state.devices.values()):
+                state.agent_connected.clear()
+            state._refresh_connectivity()
             await _emit_status_event()
         try:
             writer.close()
@@ -1483,12 +1615,29 @@ def _has_app_runtime() -> bool:
     return state.ws is not None and state.ready.is_set()
 
 
-def _has_agent_runtime() -> bool:
-    return state.agent_writer is not None and state.agent_connected.is_set()
+def _get_device(device_id: str | None = None) -> DeviceState | None:
+    """Return a specific device by ID, or the default/first connected device."""
+    if device_id:
+        return state.devices.get(device_id)
+    if state.default_device_id:
+        dev = state.devices.get(state.default_device_id)
+        if dev and dev.writer is not None:
+            return dev
+    for dev in state.devices.values():
+        if dev.writer is not None:
+            return dev
+    return None
 
 
-def _has_remote_runtime() -> bool:
-    return _has_agent_runtime() or _has_app_runtime()
+def _has_agent_runtime(device_id: str | None = None) -> bool:
+    if device_id:
+        dev = state.devices.get(device_id)
+        return dev is not None and dev.writer is not None and dev.connected.is_set()
+    return any(d.writer is not None and d.connected.is_set() for d in state.devices.values())
+
+
+def _has_remote_runtime(device_id: str | None = None) -> bool:
+    return _has_agent_runtime(device_id) or _has_app_runtime()
 
 
 def _job_payload(job: dict) -> dict:
@@ -1507,31 +1656,54 @@ def _job_payload(job: dict) -> dict:
         "reportPath": job.get("reportPath"),
         "artifactPaths": list(job.get("artifactPaths", [])),
         "executionMode": job.get("executionMode", "job"),
+        "deviceId": job.get("deviceId"),
     }
 
 
 def _status_payload() -> dict:
     active_jobs = sum(1 for job in state.jobs.values() if job.get("status") in {"queued", "running"})
+    any_agent = _has_agent_runtime()
+    default_dev = _get_device()
+
+    device_list = []
+    for d in state.devices.values():
+        d_connected = d.writer is not None and d.connected.is_set()
+        d_reconnecting = (d.grace_task is not None and not d.grace_task.done()) and not d_connected
+        device_list.append({
+            "deviceId": d.device_id,
+            "deviceName": d.device_name,
+            "connected": d_connected,
+            "reconnecting": d_reconnecting,
+            "pid": d.pid,
+            "host": d.host,
+            "workerReady": d.worker_ready,
+            "supportsBulk": d.supports_bulk,
+            "supportsAsync": d.supports_async,
+            "jobWorkers": len(d.job_workers),
+            "activeJobs": len(d.active_jobs),
+        })
+
     return {
         "connected": _has_remote_runtime(),
         "appConnected": _has_app_runtime(),
-        "launchdAgentConnected": _has_agent_runtime(),
-        "launchdWorkerReady": state.agent_worker_ready,
-        "bootstrapReady": _has_agent_runtime(),
-        "transport": "agent" if _has_agent_runtime() else ("app" if _has_app_runtime() else "offline"),
+        "launchdAgentConnected": any_agent,
+        "launchdWorkerReady": default_dev.worker_ready if default_dev else False,
+        "bootstrapReady": any_agent,
+        "transport": "agent" if any_agent else ("app" if _has_app_runtime() else "offline"),
         "activeJobs": active_jobs,
         "kernelBase": state.kernel_base,
         "kernelSlide": state.kernel_slide,
         "pid": state.pid,
-        "agentPid": state.agent_pid,
-        "agentHost": state.agent_host,
-        "agentWorkerReady": state.agent_worker_ready,
-        "agentSupportsBulk": state.agent_supports_bulk,
-        "agentSupportsAsync": state.agent_supports_async,
-        "agentJobWorkers": len(state.agent_job_workers),
-        "agentInlineLimit": state.agent_inline_limit,
-        "agentBulkChunkSize": state.agent_bulk_chunk_size,
-        "agentBulkMax": state.agent_bulk_max,
+        "agentPid": default_dev.pid if default_dev else None,
+        "agentHost": default_dev.host if default_dev else None,
+        "agentWorkerReady": default_dev.worker_ready if default_dev else False,
+        "agentSupportsBulk": default_dev.supports_bulk if default_dev else False,
+        "agentSupportsAsync": default_dev.supports_async if default_dev else False,
+        "agentJobWorkers": sum(len(d.job_workers) for d in state.devices.values()),
+        "agentInlineLimit": default_dev.inline_limit if default_dev else None,
+        "agentBulkChunkSize": default_dev.bulk_chunk_size if default_dev else None,
+        "agentBulkMax": default_dev.bulk_max if default_dev else None,
+        "devices": device_list,
     }
 
 
@@ -1645,14 +1817,16 @@ async def _exec_from_body(body: bytes) -> dict:
     code = str(req.get("code", ""))
     runtime = str(req.get("runtime") or "").strip().lower() or None
     target = str(req.get("target") or "").strip().lower() or None
+    device_id = str(req.get("deviceId") or "").strip() or None
     library_dependencies = list(req.get("libraryDependencies", []) or [])
-    if not _has_remote_runtime():
+    if not _has_remote_runtime(device_id):
         return {"error": "Device not connected"}
     result = await exec_code(
         code,
         timeout=EXEC_TIMEOUT * 4,
         runtime=runtime,
         target=target,
+        device_id=device_id,
         library_dependencies=library_dependencies,
     )
     return result or {"error": "No response from device"}
@@ -1662,6 +1836,7 @@ async def _run_skill_from_body(body: bytes) -> dict:
     req = json.loads(body.decode("utf-8") or "{}")
     skill_id = str(req.get("skillId") or "").strip()
     target = str(req.get("target") or "").strip().lower() or None
+    device_id = str(req.get("deviceId") or "").strip() or None
 
     if skill_id and not req.get("code"):
         skill_payload = _load_skill(skill_id)
@@ -1693,7 +1868,7 @@ async def _run_skill_from_body(body: bytes) -> dict:
     wrapped_code = _wrap_skill_code(code, input_values)
     library_dependencies = list(skill_payload.get("libraryDependencies", []) or [])
 
-    if runtime == DEFAULT_SKILL_RUNTIME and not _has_remote_runtime():
+    if runtime == DEFAULT_SKILL_RUNTIME and not _has_remote_runtime(device_id):
         return {"error": "JSCBridge runtime requires a connected device"}
 
     if execution_mode == "job":
@@ -1706,6 +1881,7 @@ async def _run_skill_from_body(body: bytes) -> dict:
             executionMode=execution_mode,
             status="queued",
             code=package_manager.preprocess_code(wrapped_code, library_dependencies=library_dependencies),
+            deviceId=device_id,
         )
         try:
             await _submit_job_to_agent(job)
@@ -1721,6 +1897,7 @@ async def _run_skill_from_body(body: bytes) -> dict:
         timeout=EXEC_TIMEOUT * 10,
         runtime=runtime,
         target=target,
+        device_id=device_id,
         library_dependencies=library_dependencies,
     )
     if result is None:
@@ -1962,6 +2139,62 @@ async def _fs_from_body(body: bytes) -> dict:
         return RootFS.remove(__req.path || "/", __req.recursive !== false);
       case "stat":
         return RootFS.stat(__req.path || "/");
+      case "copy": {{
+        const src = __req.path;
+        const dst = __req.destination;
+        if (!src || !dst) throw new Error("copy requires path and destination");
+        const srcStat = FileUtils.stat(src);
+        if (!srcStat) throw new Error("Source does not exist: " + src);
+        if (srcStat.isDirectory) {{
+          const copyDir = (s, d) => {{
+            FileUtils.createDir(d, 0o755);
+            const items = FileUtils.listDir(s);
+            for (const item of items) {{
+              const sp = s + "/" + item.name;
+              const dp = d + "/" + item.name;
+              if (item.isDirectory) copyDir(sp, dp);
+              else {{
+                const data = FileUtils.readFile(sp);
+                if (data) FileUtils.writeFile(dp, data);
+              }}
+            }}
+          }};
+          copyDir(src, dst);
+        }} else {{
+          const data = FileUtils.readFile(src);
+          if (data) FileUtils.writeFile(dst, data);
+          else throw new Error("Failed to read source file");
+        }}
+        return JSON.stringify({{ ok: true, path: dst }});
+      }}
+      case "move":
+        if (!__req.path || !__req.destination) throw new Error("move requires path and destination");
+        return RootFS.rename(__req.path, __req.destination);
+      case "chmod": {{
+        const path = __req.path;
+        const mode = parseInt(__req.mode);
+        if (!path || isNaN(mode)) throw new Error("chmod requires path and numeric mode");
+        const pathBuf = Native.callSymbol("calloc", 1, path.length + 1);
+        Native.writeString(pathBuf, path);
+        const r = Native.callSymbol("chmod", pathBuf, mode);
+        Native.callSymbol("free", pathBuf);
+        if (Number(r) !== 0) throw new Error("chmod failed with code " + r);
+        return JSON.stringify({{ ok: true, path: path, mode: mode }});
+      }}
+      case "symlink": {{
+        const target = __req.target;
+        const linkPath = __req.path;
+        if (!target || !linkPath) throw new Error("symlink requires target and path");
+        const targetBuf = Native.callSymbol("calloc", 1, target.length + 1);
+        Native.writeString(targetBuf, target);
+        const linkBuf = Native.callSymbol("calloc", 1, linkPath.length + 1);
+        Native.writeString(linkBuf, linkPath);
+        const r = Native.callSymbol("symlink", targetBuf, linkBuf);
+        Native.callSymbol("free", targetBuf);
+        Native.callSymbol("free", linkBuf);
+        if (Number(r) !== 0) throw new Error("symlink failed with code " + r);
+        return JSON.stringify({{ ok: true, target: target, path: linkPath }});
+      }}
       default:
         throw new Error("Unsupported fs op: " + __req.op);
     }}

@@ -25,7 +25,7 @@ import {
   writeResult,
   writeServerLogs,
 } from "./src/shared.js";
-import { handleConnectionLoss, installFileManagerBehaviors, loadDirectory } from "./src/files.js";
+import { handleConnectionLoss as handleFileConnectionLoss, installFileManagerBehaviors, loadDirectory } from "./src/files.js";
 
 const TOKEN_REGEX = /\/\/.*|\/\*[\s\S]*?\*\/|`(?:\\[\s\S]|[^`])*`|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\b(?:0x[\da-fA-F]+n?|\d+(?:\.\d+)?n?)\b|\b(?:const|let|var|if|else|return|function|class|for|while|try|catch|throw|new|await|async|switch|case|break|continue|typeof|instanceof|in|of)\b|\b(?:true|false|null|undefined|Native|FileUtils|RootFS|Apps|Tasks|TaskMemory|MachO|Staging|Libraries|skillInput|SkillInput|log|require|BigInt)\b/g;
 
@@ -196,6 +196,16 @@ async function fetchAppList(force = false) {
   } finally {
     appPickerState.loading = false;
   }
+}
+
+function invalidateAppListCache() {
+  appPickerState.apps = null;
+  appPickerState.error = null;
+}
+
+function handleConnectionLoss() {
+  invalidateAppListCache();
+  handleFileConnectionLoss();
 }
 
 function renderAppPicker(def, onSelect) {
@@ -399,6 +409,93 @@ function filteredSkills() {
   return state.skills.filter((skill) => skill.name.toLowerCase().includes(query) || (skill.summary || "").toLowerCase().includes(query));
 }
 
+function groupSkillsBySource(skills) {
+  const groups = new Map();
+  for (const skill of skills) {
+    let key, label;
+    if (skill.sourceType === "linked" && skill.packageName) {
+      key = `linked:${skill.packageId || skill.packageName}`;
+      label = skill.packageName;
+    } else if (skill.sourceType === "linked") {
+      key = "linked:unknown";
+      label = "Linked";
+    } else if (skill.sourceType === "local") {
+      key = "local";
+      label = "Local";
+    } else {
+      key = "builtin";
+      label = "Built-in";
+    }
+    let group = groups.get(key);
+    if (!group) {
+      group = { key, label, sourceType: skill.sourceType || "builtin", skills: [] };
+      groups.set(key, group);
+    }
+    group.skills.push(skill);
+  }
+  return [...groups.values()];
+}
+
+function buildSkillCard(skill) {
+  const card = document.createElement("div");
+  card.className = "skill-card";
+
+  const header = document.createElement("div");
+  header.className = "skill-card-header";
+  const name = document.createElement("strong");
+  name.className = "skill-card-name";
+  name.textContent = skill.name;
+  const date = document.createElement("span");
+  date.className = "skill-card-date";
+  date.textContent = formatDate(skill.updatedAt);
+  header.append(name, date);
+
+  const summary = document.createElement("p");
+  summary.className = "skill-card-summary";
+  summary.textContent = skill.summary || "No description";
+
+  const tags = document.createElement("div");
+  tags.className = "skill-card-tags";
+  if (skill.executionMode === "job") {
+    const modeTag = document.createElement("span");
+    modeTag.className = "tag tag-warm";
+    modeTag.textContent = "Detached Job";
+    tags.append(modeTag);
+  }
+  if (skill.inputCount > 0) {
+    const inputTag = document.createElement("span");
+    inputTag.className = "tag tag-muted";
+    inputTag.textContent = `${skill.inputCount} input${skill.inputCount === 1 ? "" : "s"}`;
+    tags.append(inputTag);
+  }
+  if (Array.isArray(skill.libraryDependencies) && skill.libraryDependencies.length > 0) {
+    const depsTag = document.createElement("span");
+    depsTag.className = "tag tag-muted";
+    depsTag.textContent = `${skill.libraryDependencies.length} libr${skill.libraryDependencies.length === 1 ? "ary" : "aries"}`;
+    tags.append(depsTag);
+  }
+
+  const footer = document.createElement("div");
+  footer.className = "skill-card-footer";
+  const runBtn = document.createElement("button");
+  runBtn.type = "button";
+  runBtn.className = "btn btn-primary btn-sm";
+  runBtn.textContent = "Run";
+  runBtn.addEventListener("click", (event) => {
+    event.stopPropagation();
+    quickRunSkill(skill.id);
+  });
+  footer.append(runBtn);
+
+  if (tags.childElementCount > 0) {
+    card.append(header, summary, tags, footer);
+  } else {
+    card.append(header, summary, footer);
+  }
+  card.addEventListener("click", () => openSkillInEditor(skill.id));
+  return card;
+}
+
 function renderSkillGrid() {
   const skills = filteredSkills();
   els.skillGrid.innerHTML = "";
@@ -419,71 +516,34 @@ function renderSkillGrid() {
     return;
   }
 
-  for (const skill of skills) {
-    const card = document.createElement("div");
-    card.className = "skill-card";
+  const groups = groupSkillsBySource(skills);
+  const fragment = document.createDocumentFragment();
 
-    const header = document.createElement("div");
-    header.className = "skill-card-header";
-    const name = document.createElement("strong");
-    name.className = "skill-card-name";
-    name.textContent = skill.name;
-    const date = document.createElement("span");
-    date.className = "skill-card-date";
-    date.textContent = formatDate(skill.updatedAt);
-    header.append(name, date);
+  for (const group of groups) {
+    const section = document.createElement("div");
+    section.className = "skill-section";
 
-    const summary = document.createElement("p");
-    summary.className = "skill-card-summary";
-    summary.textContent = skill.summary || "No description";
+    const separator = document.createElement("div");
+    separator.className = `skill-section-header skill-section-${group.sourceType}`;
+    const label = document.createElement("span");
+    label.className = "skill-section-label";
+    label.textContent = group.label;
+    const count = document.createElement("span");
+    count.className = "skill-section-count";
+    count.textContent = String(group.skills.length);
+    separator.append(label, count);
+    section.append(separator);
 
-    const tags = document.createElement("div");
-    tags.className = "skill-card-tags";
-    if (skill.sourceType) {
-      const sourceTag = document.createElement("span");
-      sourceTag.className = "tag tag-muted";
-      sourceTag.textContent = skill.sourceType === "linked" ? `Linked${skill.packageName ? ` · ${skill.packageName}` : ""}` : (skill.sourceType === "local" ? "Local" : "Built-in");
-      tags.append(sourceTag);
+    const grid = document.createElement("div");
+    grid.className = "skill-section-grid";
+    for (const skill of group.skills) {
+      grid.append(buildSkillCard(skill));
     }
-    if (skill.executionMode === "job") {
-      const modeTag = document.createElement("span");
-      modeTag.className = "tag tag-warm";
-      modeTag.textContent = "Detached Job";
-      tags.append(modeTag);
-    }
-    if (skill.inputCount > 0) {
-      const inputTag = document.createElement("span");
-      inputTag.className = "tag tag-muted";
-      inputTag.textContent = `${skill.inputCount} input${skill.inputCount === 1 ? "" : "s"}`;
-      tags.append(inputTag);
-    }
-    if (Array.isArray(skill.libraryDependencies) && skill.libraryDependencies.length > 0) {
-      const depsTag = document.createElement("span");
-      depsTag.className = "tag tag-muted";
-      depsTag.textContent = `${skill.libraryDependencies.length} libr${skill.libraryDependencies.length === 1 ? "ary" : "aries"}`;
-      tags.append(depsTag);
-    }
-
-    const footer = document.createElement("div");
-    footer.className = "skill-card-footer";
-    const runBtn = document.createElement("button");
-    runBtn.type = "button";
-    runBtn.className = "btn btn-primary btn-sm";
-    runBtn.textContent = "Run";
-    runBtn.addEventListener("click", (event) => {
-      event.stopPropagation();
-      quickRunSkill(skill.id);
-    });
-    footer.append(runBtn);
-
-    if (tags.childElementCount > 0) {
-      card.append(header, summary, tags, footer);
-    } else {
-      card.append(header, summary, footer);
-    }
-    card.addEventListener("click", () => openSkillInEditor(skill.id));
-    els.skillGrid.append(card);
+    section.append(grid);
+    fragment.append(section);
   }
+
+  els.skillGrid.append(fragment);
 }
 
 function syncSkillModeControls() {
@@ -635,6 +695,7 @@ async function executeRun() {
 
   try {
     const target = els.targetSelect.value;
+    const deviceId = els.deviceSelect ? els.deviceSelect.value : "";
     const result = await requestJson("/api/skills/run", {
       method: "POST",
       body: JSON.stringify({
@@ -649,6 +710,7 @@ async function executeRun() {
         entryFile: state.skillEntryFile || undefined,
         libraryDependencies: state.skillLibraryDependencies,
         target: target !== "auto" ? target : undefined,
+        deviceId: deviceId || undefined,
       }),
     });
     if (result.jobId) {
@@ -1363,16 +1425,17 @@ async function init() {
   writeResult("No script executed yet.");
   writeLogs([]);
   activateView("skills");
-  connectEventStream({ onJob: handleJobEvent, onDisconnect: handleConnectionLoss });
+  const statusCallbacks = { onDisconnect: handleConnectionLoss, onConnectionChange: invalidateAppListCache };
+  connectEventStream({ onJob: handleJobEvent, ...statusCallbacks });
 
   await Promise.all([
-    refreshStatus(handleConnectionLoss),
+    refreshStatus(statusCallbacks),
     refreshSkills(),
     refreshPackagesAndLibraries(),
     refreshServerLogs(),
   ]);
   window.setInterval(async () => {
-    await refreshStatus(handleConnectionLoss);
+    await refreshStatus(statusCallbacks);
     if (state.activeJobId) await refreshJob(state.activeJobId);
   }, 3000);
 }

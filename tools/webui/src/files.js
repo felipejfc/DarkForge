@@ -18,6 +18,8 @@ function setFileBusy(nextBusy) {
   els.fileCopyPathButton.disabled = disabled || !state.fileSelection;
   els.fileDownloadButton.disabled = disabled || !state.fileSelection || state.fileSelection.isDirectory;
   els.fileSaveButton.classList.toggle("is-running", nextBusy);
+  els.filePasteButton.disabled = disabled || !state.fileClipboard;
+  els.fileNewLinkButton.disabled = disabled;
 }
 
 function setFileStatus(label, variant = "") {
@@ -150,6 +152,10 @@ function renderFileList() {
     return;
   }
 
+  const cutPaths = (state.fileClipboard && state.fileClipboard.mode === "cut")
+    ? new Set(state.fileClipboard.entries.map(e => e.path))
+    : null;
+
   entries.forEach((entry, idx) => {
     const fragment = els.fileItemTemplate.content.cloneNode(true);
     const button = fragment.querySelector(".file-item");
@@ -158,9 +164,21 @@ function renderFileList() {
     const sizeEl = fragment.querySelector(".file-item-size");
     const typeEl = fragment.querySelector(".file-item-type");
 
+    // Prepend checkbox for multi-select
+    const check = document.createElement("input");
+    check.type = "checkbox";
+    check.className = "file-item-check";
+    check.checked = state.fileMultiSelect.includes(entry.path);
+    check.addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggleMultiSelect(entry, e.shiftKey);
+    });
+    button.prepend(check);
+
     button.dataset.index = idx;
     button.classList.toggle("is-active", state.fileSelection?.path === entry.path);
     if (idx === state.fileFocusIndex) button.classList.add("is-focused");
+    if (cutPaths && cutPaths.has(entry.path)) button.classList.add("is-cut");
     icon.textContent = entry.isLink ? "↗" : (entry.isDirectory ? "▣" : "·");
     icon.classList.toggle("is-file", !entry.isDirectory);
     icon.classList.toggle("is-link", !!entry.isLink);
@@ -177,6 +195,8 @@ function renderFileList() {
       } else {
         els.filePreviewMeta.textContent = `${entry.path} · ${formatFileSize(entry.size)}` + (isTextFile(entry) ? "" : " · Binary");
       }
+      // Fetch stat for permissions info
+      fetchStatForPreview(entry);
       els.filePreviewEmpty.hidden = false;
       els.fileEditor.value = "";
       els.fileEditor.disabled = true;
@@ -235,6 +255,18 @@ function handleContextMenuAction(action) {
       break;
     case "download":
       if (!entry.isDirectory) downloadFile(entry);
+      break;
+    case "copy":
+      copyToClipboard([entry], "copy");
+      break;
+    case "cut":
+      copyToClipboard([entry], "cut");
+      break;
+    case "moveto":
+      moveToPrompt(entry);
+      break;
+    case "permissions":
+      showPermissions(entry);
       break;
     case "rename":
       state.fileSelection = entry;
@@ -306,6 +338,8 @@ async function loadDirectory(path = state.fileCurrentPath) {
     state.fileCurrentPath = listing.path;
     state.fileEntries = listing.entries || [];
     state.fileFocusIndex = -1;
+    state.fileMultiSelect = [];
+    updateBulkBar();
     els.filePathInput.value = listing.path;
     if (state.fileSelection && !state.fileEntries.find((entry) => entry.path === state.fileSelection.path)) {
       resetFileSelection();
@@ -448,6 +482,215 @@ async function deleteSelection() {
     resetFileSelection();
     await loadDirectory(state.fileCurrentPath);
     showToast(`Deleted ${label}`, "info");
+  } catch (error) {
+    setFileStatus(error.message, "error");
+    showToast(error.message, "error");
+  } finally {
+    setFileBusy(false);
+  }
+}
+
+// ---- Clipboard (Copy/Cut/Paste) ----
+
+function copyToClipboard(entries, mode) {
+  state.fileClipboard = { entries: [...entries], mode };
+  els.filePasteButton.disabled = false;
+  showToast(mode === "cut" ? `Cut ${entries.length} item(s)` : `Copied ${entries.length} item(s)`, "info");
+  renderFileList();
+}
+
+function addCopySuffix(name) {
+  const dot = name.lastIndexOf(".");
+  if (dot > 0) {
+    return name.slice(0, dot) + " (copy)" + name.slice(dot);
+  }
+  return name + " (copy)";
+}
+
+async function pasteFromClipboard() {
+  if (!state.fileClipboard) return;
+  const { entries, mode } = state.fileClipboard;
+  setFileBusy(true);
+  setFileStatus(`${mode === "cut" ? "Moving" : "Copying"} ${entries.length} item(s)…`, "running");
+  try {
+    for (const entry of entries) {
+      let destName = entry.name;
+      if (state.fileEntries.some(e => e.name === destName)) {
+        destName = mode === "copy" ? addCopySuffix(entry.name) : entry.name;
+      }
+      const destination = joinFsPath(state.fileCurrentPath, destName);
+      if (mode === "cut") {
+        await fsRequest("move", { path: entry.path, destination });
+      } else {
+        await fsRequest("copy", { path: entry.path, destination });
+      }
+    }
+    if (mode === "cut") state.fileClipboard = null;
+    els.filePasteButton.disabled = !state.fileClipboard;
+    await loadDirectory(state.fileCurrentPath);
+    showToast(`${mode === "cut" ? "Moved" : "Copied"} ${entries.length} item(s)`, "success");
+  } catch (error) {
+    setFileStatus(error.message, "error");
+    showToast(error.message, "error");
+  } finally {
+    setFileBusy(false);
+  }
+}
+
+// ---- Multi-select ----
+
+function toggleMultiSelect(entry, shiftKey) {
+  const idx = state.fileMultiSelect.findIndex(p => p === entry.path);
+  if (shiftKey && state.fileMultiSelect.length > 0) {
+    const entries = getFilteredSortedEntries();
+    const lastPath = state.fileMultiSelect[state.fileMultiSelect.length - 1];
+    const lastIdx = entries.findIndex(e => e.path === lastPath);
+    const curIdx = entries.findIndex(e => e.path === entry.path);
+    const [from, to] = lastIdx < curIdx ? [lastIdx, curIdx] : [curIdx, lastIdx];
+    for (let i = from; i <= to; i++) {
+      if (!state.fileMultiSelect.includes(entries[i].path)) {
+        state.fileMultiSelect.push(entries[i].path);
+      }
+    }
+  } else if (idx >= 0) {
+    state.fileMultiSelect.splice(idx, 1);
+  } else {
+    state.fileMultiSelect.push(entry.path);
+  }
+  updateBulkBar();
+  renderFileList();
+}
+
+function updateBulkBar() {
+  const count = state.fileMultiSelect.length;
+  els.fileBulkBar.hidden = count === 0;
+  els.fileBulkCount.textContent = `${count} item${count === 1 ? "" : "s"} selected`;
+}
+
+function clearMultiSelect() {
+  state.fileMultiSelect = [];
+  updateBulkBar();
+  renderFileList();
+}
+
+function getSelectedEntries() {
+  return state.fileEntries.filter(e => state.fileMultiSelect.includes(e.path));
+}
+
+async function bulkDeleteSelected() {
+  const selected = getSelectedEntries();
+  if (selected.length === 0) return;
+  const confirmed = await confirmAction({
+    title: "Delete selected",
+    message: `Delete ${selected.length} item(s)? This cannot be undone.`,
+    confirmLabel: `Delete ${selected.length} item(s)`,
+  });
+  if (!confirmed) return;
+  setFileBusy(true);
+  setFileStatus(`Deleting ${selected.length} item(s)…`, "running");
+  try {
+    for (const entry of selected) {
+      await fsRequest("delete", { path: entry.path, recursive: true });
+    }
+    clearMultiSelect();
+    resetFileSelection();
+    await loadDirectory(state.fileCurrentPath);
+    showToast(`Deleted ${selected.length} item(s)`, "info");
+  } catch (error) {
+    setFileStatus(error.message, "error");
+    showToast(error.message, "error");
+  } finally {
+    setFileBusy(false);
+  }
+}
+
+// ---- Permissions (chmod) ----
+
+async function showPermissions(entry) {
+  const mode = window.prompt("Set permissions (octal, e.g. 0755)", "0755");
+  if (!mode) return;
+  const parsed = parseInt(mode, 8);
+  if (isNaN(parsed) || parsed < 0 || parsed > 0o7777) {
+    showToast("Invalid octal permissions", "error");
+    return;
+  }
+  setFileBusy(true);
+  try {
+    await fsRequest("chmod", { path: entry.path, mode: parsed });
+    showToast(`Permissions set to ${mode}`, "success");
+    await loadDirectory(state.fileCurrentPath);
+  } catch (error) {
+    showToast(error.message, "error");
+  } finally {
+    setFileBusy(false);
+  }
+}
+
+// ---- Stat for preview permissions ----
+
+async function fetchStatForPreview(entry) {
+  try {
+    const stat = await fsRequest("stat", { path: entry.path });
+    let meta = entry.path;
+    if (entry.isDirectory) {
+      meta += " · Directory";
+    } else {
+      meta += ` · ${formatFileSize(entry.size)}` + (isTextFile(entry) ? "" : " · Binary");
+    }
+    if (stat.mode != null) {
+      meta += ` · ${("0000" + stat.mode.toString(8)).slice(-4)}`;
+    }
+    if (stat.owner) {
+      meta += ` · ${stat.owner}`;
+    }
+    if (stat.modified) {
+      const d = new Date(stat.modified);
+      if (!isNaN(d.getTime())) {
+        meta += ` · ${d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}`;
+      }
+    }
+    // Only update if this entry is still selected
+    if (state.fileSelection?.path === entry.path) {
+      els.filePreviewMeta.textContent = meta;
+    }
+  } catch {
+    // stat not supported or failed; keep existing meta
+  }
+}
+
+// ---- Move to ----
+
+async function moveToPrompt(entry) {
+  const dest = window.prompt("Move to (full path)", entry.path);
+  if (!dest || dest === entry.path) return;
+  setFileBusy(true);
+  setFileStatus("Moving…", "running");
+  try {
+    await fsRequest("move", { path: entry.path, destination: dest.trim() });
+    resetFileSelection();
+    await loadDirectory(state.fileCurrentPath);
+    showToast(`Moved to ${dest.trim()}`, "success");
+  } catch (error) {
+    setFileStatus(error.message, "error");
+    showToast(error.message, "error");
+  } finally {
+    setFileBusy(false);
+  }
+}
+
+// ---- Symlink creation ----
+
+async function promptNewLink() {
+  const target = window.prompt("Symlink target path");
+  if (!target) return;
+  const name = window.prompt("Link name");
+  if (!name) return;
+  setFileBusy(true);
+  setFileStatus("Creating symlink…", "running");
+  try {
+    await fsRequest("symlink", { target: target.trim(), path: joinFsPath(state.fileCurrentPath, name.trim()) });
+    await loadDirectory(state.fileCurrentPath);
+    showToast(`Created link ${name}`, "success");
   } catch (error) {
     setFileStatus(error.message, "error");
     showToast(error.message, "error");
@@ -599,6 +842,20 @@ export function installFileManagerBehaviors() {
   els.fileNewFileButton.addEventListener("click", promptNewFile);
   els.fileUploadButton.addEventListener("click", () => els.fileUploadInput.click());
   els.fileUploadInput.addEventListener("change", () => uploadFiles(Array.from(els.fileUploadInput.files)));
+  els.filePasteButton.addEventListener("click", pasteFromClipboard);
+  els.fileNewLinkButton.addEventListener("click", promptNewLink);
+
+  // Bulk action bar
+  els.fileBulkCopy.addEventListener("click", () => {
+    const selected = getSelectedEntries();
+    if (selected.length) copyToClipboard(selected, "copy");
+  });
+  els.fileBulkCut.addEventListener("click", () => {
+    const selected = getSelectedEntries();
+    if (selected.length) copyToClipboard(selected, "cut");
+  });
+  els.fileBulkDelete.addEventListener("click", bulkDeleteSelected);
+  els.fileBulkDeselect.addEventListener("click", clearMultiSelect);
   els.fileCopyPathButton.addEventListener("click", copySelectionPath);
   els.fileDownloadButton.addEventListener("click", () => {
     if (state.fileSelection && !state.fileSelection.isDirectory) downloadFile(state.fileSelection);
@@ -688,7 +945,27 @@ export function installFileManagerBehaviors() {
     const entries = getFilteredSortedEntries();
     if (!entries.length) return;
 
-    if (event.key === "ArrowDown") {
+    const mod = event.metaKey || event.ctrlKey;
+
+    if (mod && event.key === "c") {
+      event.preventDefault();
+      const selected = getSelectedEntries();
+      if (selected.length) copyToClipboard(selected, "copy");
+      else if (state.fileSelection) copyToClipboard([state.fileSelection], "copy");
+    } else if (mod && event.key === "x") {
+      event.preventDefault();
+      const selected = getSelectedEntries();
+      if (selected.length) copyToClipboard(selected, "cut");
+      else if (state.fileSelection) copyToClipboard([state.fileSelection], "cut");
+    } else if (mod && event.key === "v") {
+      event.preventDefault();
+      pasteFromClipboard();
+    } else if (mod && event.key === "a") {
+      event.preventDefault();
+      state.fileMultiSelect = entries.map(e => e.path);
+      updateBulkBar();
+      renderFileList();
+    } else if (event.key === "ArrowDown") {
       event.preventDefault();
       state.fileFocusIndex = Math.min(state.fileFocusIndex + 1, entries.length - 1);
       renderFileList();
@@ -726,10 +1003,16 @@ export function installFileManagerBehaviors() {
       event.preventDefault();
       loadDirectory(state.fileCurrentPath);
     }
-    if ((event.metaKey || event.ctrlKey) && event.key === "f") {
+    const mod = event.metaKey || event.ctrlKey;
+    if (mod && event.key === "f") {
       event.preventDefault();
       els.fileSearchInput.focus();
       els.fileSearchInput.select();
+    }
+    // Global Ctrl/Cmd+V for paste when in files view
+    if (mod && event.key === "v" && document.activeElement !== els.fileEditor && document.activeElement !== els.filePathInput && document.activeElement !== els.fileSearchInput) {
+      event.preventDefault();
+      pasteFromClipboard();
     }
   });
 
