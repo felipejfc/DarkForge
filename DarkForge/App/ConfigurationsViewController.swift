@@ -20,6 +20,14 @@ class ConfigurationsViewController: UIViewController, UITextFieldDelegate {
 
     // MARK: - UI Elements
 
+    private let scrollView: UIScrollView = {
+        let sv = UIScrollView()
+        sv.translatesAutoresizingMaskIntoConstraints = false
+        sv.alwaysBounceVertical = true
+        sv.keyboardDismissMode = .interactive
+        return sv
+    }()
+
     private let titleLabel: UILabel = {
         let label = UILabel()
         label.text = "Configurations"
@@ -326,6 +334,18 @@ class ConfigurationsViewController: UIViewController, UITextFieldDelegate {
         return label
     }()
 
+    private let versionLabel: UILabel = {
+        let label = UILabel()
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0"
+        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
+        label.text = "DarkForge v\(version) (\(build))"
+        label.font = UIFont.monospacedSystemFont(ofSize: 11, weight: .medium)
+        label.textColor = Theme.textDim
+        label.textAlignment = .center
+        label.translatesAutoresizingMaskIntoConstraints = false
+        return label
+    }()
+
     // MARK: - Lifecycle
 
     override func viewDidLoad() {
@@ -353,9 +373,11 @@ class ConfigurationsViewController: UIViewController, UITextFieldDelegate {
         tapGesture.cancelsTouchesInView = false
         view.addGestureRecognizer(tapGesture)
 
-        view.addSubview(titleLabel)
+        view.addSubview(scrollView)
 
-        view.addSubview(replCard)
+        scrollView.addSubview(titleLabel)
+
+        scrollView.addSubview(replCard)
         replCard.addSubview(replHeaderView)
         replHeaderView.addSubview(replHeaderLabel)
         replCard.addSubview(replStatusDot)
@@ -363,7 +385,7 @@ class ConfigurationsViewController: UIViewController, UITextFieldDelegate {
         replCard.addSubview(replButton)
         replCard.addSubview(replDisconnectButton)
 
-        view.addSubview(serverCard)
+        scrollView.addSubview(serverCard)
         serverCard.addSubview(serverHeaderView)
         serverHeaderView.addSubview(serverHeaderLabel)
         serverCard.addSubview(serverTitleLabel)
@@ -382,6 +404,8 @@ class ConfigurationsViewController: UIViewController, UITextFieldDelegate {
         serverCard.addSubview(serverSaveButton)
         serverCard.addSubview(serverStatusLabel)
 
+        scrollView.addSubview(versionLabel)
+
         serverAddressField.delegate = self
         serverAddressField.addTarget(self, action: #selector(serverAddressEditingChanged), for: .editingChanged)
         replPortField.delegate = self
@@ -395,13 +419,21 @@ class ConfigurationsViewController: UIViewController, UITextFieldDelegate {
         syncLoggingSwitch.addTarget(self, action: #selector(syncLoggingSwitchChanged), for: .valueChanged)
         serverSaveButton.addTarget(self, action: #selector(saveServerAddressTapped), for: .touchUpInside)
 
+        let contentGuide = scrollView.contentLayoutGuide
+        let frameGuide = scrollView.frameLayoutGuide
+
         NSLayoutConstraint.activate([
-            titleLabel.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 16),
-            titleLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 20),
+            scrollView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            scrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+
+            titleLabel.topAnchor.constraint(equalTo: contentGuide.topAnchor, constant: 16),
+            titleLabel.leadingAnchor.constraint(equalTo: frameGuide.leadingAnchor, constant: 20),
 
             replCard.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 20),
-            replCard.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
-            replCard.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
+            replCard.leadingAnchor.constraint(equalTo: frameGuide.leadingAnchor, constant: 16),
+            replCard.trailingAnchor.constraint(equalTo: frameGuide.trailingAnchor, constant: -16),
 
             replHeaderView.topAnchor.constraint(equalTo: replCard.topAnchor),
             replHeaderView.leadingAnchor.constraint(equalTo: replCard.leadingAnchor),
@@ -431,9 +463,8 @@ class ConfigurationsViewController: UIViewController, UITextFieldDelegate {
             replDisconnectButton.widthAnchor.constraint(equalTo: replButton.widthAnchor),
 
             serverCard.topAnchor.constraint(equalTo: replCard.bottomAnchor, constant: 16),
-            serverCard.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
-            serverCard.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
-            serverCard.bottomAnchor.constraint(lessThanOrEqualTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -16),
+            serverCard.leadingAnchor.constraint(equalTo: frameGuide.leadingAnchor, constant: 16),
+            serverCard.trailingAnchor.constraint(equalTo: frameGuide.trailingAnchor, constant: -16),
 
             serverHeaderView.topAnchor.constraint(equalTo: serverCard.topAnchor),
             serverHeaderView.leadingAnchor.constraint(equalTo: serverCard.leadingAnchor),
@@ -506,6 +537,10 @@ class ConfigurationsViewController: UIViewController, UITextFieldDelegate {
             serverStatusLabel.leadingAnchor.constraint(equalTo: serverTitleLabel.leadingAnchor),
             serverStatusLabel.trailingAnchor.constraint(equalTo: serverTitleLabel.trailingAnchor),
             serverStatusLabel.bottomAnchor.constraint(equalTo: serverCard.bottomAnchor, constant: -16),
+
+            versionLabel.topAnchor.constraint(equalTo: serverCard.bottomAnchor, constant: 20),
+            versionLabel.centerXAnchor.constraint(equalTo: frameGuide.centerXAnchor),
+            versionLabel.bottomAnchor.constraint(equalTo: contentGuide.bottomAnchor, constant: -20),
         ])
     }
 

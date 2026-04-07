@@ -64,6 +64,32 @@ class ViewController: UIViewController, ExploitLogDelegate {
         return label
     }()
 
+    private let replPill: UIView = {
+        let v = UIView()
+        v.backgroundColor = UIColor(red: 0.5, green: 0.5, blue: 0.5, alpha: 0.12)
+        v.layer.cornerRadius = 10
+        v.translatesAutoresizingMaskIntoConstraints = false
+        v.isHidden = true
+        return v
+    }()
+
+    private let replDot: UIView = {
+        let v = UIView()
+        v.backgroundColor = Theme.textDim
+        v.layer.cornerRadius = 3
+        v.translatesAutoresizingMaskIntoConstraints = false
+        return v
+    }()
+
+    private let replLabel: UILabel = {
+        let label = UILabel()
+        label.text = "Control Center"
+        label.font = UIFont.monospacedSystemFont(ofSize: 9, weight: .semibold)
+        label.textColor = Theme.textDim
+        label.translatesAutoresizingMaskIntoConstraints = false
+        return label
+    }()
+
     private let statusPill: UIView = {
         let v = UIView()
         v.backgroundColor = Theme.accentGlow
@@ -155,6 +181,10 @@ class ViewController: UIViewController, ExploitLogDelegate {
                                                selector: #selector(handleAgentReady),
                                                name: .darkForgeAgentReady,
                                                object: nil)
+        NotificationCenter.default.addObserver(self,
+                                               selector: #selector(handleREPLStateChanged(_:)),
+                                               name: .darkForgeREPLStateChanged,
+                                               object: nil)
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -178,6 +208,9 @@ class ViewController: UIViewController, ExploitLogDelegate {
         view.addSubview(headerView)
         headerView.addSubview(titleLabel)
         headerView.addSubview(subtitleLabel)
+        headerView.addSubview(replPill)
+        replPill.addSubview(replDot)
+        replPill.addSubview(replLabel)
 
         // Status pill
         view.addSubview(statusPill)
@@ -205,6 +238,19 @@ class ViewController: UIViewController, ExploitLogDelegate {
             subtitleLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 2),
             subtitleLabel.leadingAnchor.constraint(equalTo: headerView.leadingAnchor),
             subtitleLabel.bottomAnchor.constraint(equalTo: headerView.bottomAnchor),
+
+            replPill.centerYAnchor.constraint(equalTo: subtitleLabel.centerYAnchor),
+            replPill.leadingAnchor.constraint(equalTo: subtitleLabel.trailingAnchor, constant: 8),
+            replPill.heightAnchor.constraint(equalToConstant: 20),
+
+            replDot.leadingAnchor.constraint(equalTo: replPill.leadingAnchor, constant: 7),
+            replDot.centerYAnchor.constraint(equalTo: replPill.centerYAnchor),
+            replDot.widthAnchor.constraint(equalToConstant: 6),
+            replDot.heightAnchor.constraint(equalToConstant: 6),
+
+            replLabel.leadingAnchor.constraint(equalTo: replDot.trailingAnchor, constant: 5),
+            replLabel.centerYAnchor.constraint(equalTo: replPill.centerYAnchor),
+            replLabel.trailingAnchor.constraint(equalTo: replPill.trailingAnchor, constant: -7),
 
             // Status pill
             statusPill.centerYAnchor.constraint(equalTo: headerView.centerYAnchor),
@@ -435,8 +481,13 @@ class ViewController: UIViewController, ExploitLogDelegate {
 
     private func configureButtonForRuntime() {
         startButton.isEnabled = true
-        startButton.setTitle("  Start Runtime", for: .normal)
-        startButton.setImage(UIImage(systemName: "bolt.fill"), for: .normal)
+        if case .failed = uiState {
+            startButton.setTitle("  Retry", for: .normal)
+            startButton.setImage(UIImage(systemName: "arrow.clockwise"), for: .normal)
+        } else {
+            startButton.setTitle("  Start Runtime", for: .normal)
+            startButton.setImage(UIImage(systemName: "bolt.fill"), for: .normal)
+        }
         startButton.backgroundColor = Theme.accent
         startButton.tintColor = .black
         startButton.setTitleColor(.black, for: .normal)
@@ -494,6 +545,9 @@ class ViewController: UIViewController, ExploitLogDelegate {
     }
 
     private func startExploit() {
+        // Clean up any partial state from a previous failed attempt
+        KExploit.shutdownActiveREPL(reason: "retry")
+
         uiState = .running
         configureButtonDisabled()
         logTextView.text = ""
@@ -560,6 +614,21 @@ class ViewController: UIViewController, ExploitLogDelegate {
         }
     }
 
+    // MARK: - REPL Connection State
+
+    @objc private func handleREPLStateChanged(_ notification: Notification) {
+        guard let state = notification.userInfo?["state"] as? String else { return }
+        if state == "connected" {
+            replPill.isHidden = false
+            replDot.backgroundColor = Theme.agentActive
+            replLabel.text = "Control Center"
+            replLabel.textColor = Theme.agentActive
+            replPill.backgroundColor = Theme.agentActiveGlow
+        } else {
+            replPill.isHidden = true
+        }
+    }
+
     // MARK: - Agent Ready (post-bootstrap)
 
     @objc private func handleAgentReady() {
@@ -602,8 +671,21 @@ class ViewController: UIViewController, ExploitLogDelegate {
         scrollToBottom()
     }
 
+    private var scrollPending = false
+
     private func scrollToBottom() {
-        let range = NSRange(location: logTextView.textStorage.length - 1, length: 1)
-        logTextView.scrollRangeToVisible(range)
+        guard !scrollPending else { return }
+        scrollPending = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.scrollPending = false
+            self.logTextView.layoutManager.ensureLayout(
+                forCharacterRange: NSRange(location: 0, length: self.logTextView.textStorage.length)
+            )
+            let bottom = self.logTextView.contentSize.height - self.logTextView.bounds.height
+            if bottom > 0 {
+                self.logTextView.setContentOffset(CGPoint(x: 0, y: bottom), animated: false)
+            }
+        }
     }
 }

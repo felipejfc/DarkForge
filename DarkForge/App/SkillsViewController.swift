@@ -827,7 +827,14 @@ private struct Theme {
 
 final class SkillsViewController: UIViewController {
 
+    private struct SkillSection {
+        let title: String
+        let sourceType: String // "builtin", "linked", "local"
+        let skills: [SkillListEntry]
+    }
+
     private var skills: [SkillListEntry] = []
+    private var sections: [SkillSection] = []
 
     private let headerStack: UIStackView = {
         let stack = UIStackView()
@@ -1014,6 +1021,7 @@ final class SkillsViewController: UIViewController {
         }
         skills.append(contentsOf: SkillsPackageStore.shared.loadInstalledSkills())
         skills.sort { $0.definition.name.localizedCaseInsensitiveCompare($1.definition.name) == .orderedAscending }
+        buildSections()
         emptyLabel.text = skills.isEmpty ? "No skills available." : nil
         emptyLabel.isHidden = !skills.isEmpty
         countBadge.text = "\(skills.count)"
@@ -1024,6 +1032,40 @@ final class SkillsViewController: UIViewController {
         countBadge.widthAnchor.constraint(equalToConstant: badgeWidth).isActive = true
         countBadge.heightAnchor.constraint(equalToConstant: 20).isActive = true
         tableView.reloadData()
+    }
+
+    private func buildSections() {
+        // Group skills by source preserving insertion order
+        var groupOrder: [String] = []
+        var grouped: [String: (title: String, sourceType: String, skills: [SkillListEntry])] = [:]
+        for skill in skills {
+            let key: String
+            let title: String
+            let sourceType = skill.source.type
+            switch sourceType {
+            case "builtin":
+                key = "builtin"
+                title = "Built-in"
+            case "local":
+                key = "local"
+                title = "Local"
+            case "linked":
+                key = "linked:\(skill.source.packageId ?? skill.source.packageName ?? "unknown")"
+                title = skill.source.packageName ?? "Linked"
+            default:
+                key = "other"
+                title = "Other"
+            }
+            if grouped[key] == nil {
+                groupOrder.append(key)
+                grouped[key] = (title: title, sourceType: sourceType, skills: [])
+            }
+            grouped[key]!.skills.append(skill)
+        }
+        sections = groupOrder.compactMap { key in
+            guard let g = grouped[key] else { return nil }
+            return SkillSection(title: g.title, sourceType: g.sourceType, skills: g.skills)
+        }
     }
 
     private func runSkill(_ skill: SkillListEntry, inputs: [String: Any]) {
@@ -1133,13 +1175,17 @@ final class SkillsViewController: UIViewController {
 
 extension SkillsViewController: UITableViewDataSource, UITableViewDelegate {
 
+    func numberOfSections(in tableView: UITableView) -> Int {
+        sections.count
+    }
+
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        skills.count
+        sections[section].skills.count
     }
 
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         let cell = tableView.dequeueReusableCell(withIdentifier: SkillCell.reuseID, for: indexPath) as! SkillCell
-        let skill = skills[indexPath.row]
+        let skill = sections[indexPath.section].skills[indexPath.row]
         cell.configure(name: skill.definition.name,
                        summary: skill.definition.summary,
                        inputCount: skill.definition.inputs.count,
@@ -1147,11 +1193,22 @@ extension SkillsViewController: UITableViewDataSource, UITableViewDelegate {
         return cell
     }
 
+    func tableView(_ tableView: UITableView, viewForHeaderInSection section: Int) -> UIView? {
+        let sec = sections[section]
+        let header = SectionHeaderView()
+        header.configure(title: sec.title, count: sec.skills.count, sourceType: sec.sourceType)
+        return header
+    }
+
+    func tableView(_ tableView: UITableView, heightForHeaderInSection section: Int) -> CGFloat {
+        36
+    }
+
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: false)
         let generator = UIImpactFeedbackGenerator(style: .light)
         generator.impactOccurred()
-        presentInputForm(for: skills[indexPath.row])
+        presentInputForm(for: sections[indexPath.section].skills[indexPath.row])
     }
 
     func tableView(_ tableView: UITableView, heightForRowAt indexPath: IndexPath) -> CGFloat {
@@ -1163,7 +1220,7 @@ extension SkillsViewController: UITableViewDataSource, UITableViewDelegate {
     }
 
     func tableView(_ tableView: UITableView, trailingSwipeActionsConfigurationForRowAt indexPath: IndexPath) -> UISwipeActionsConfiguration? {
-        let skill = skills[indexPath.row]
+        let skill = sections[indexPath.section].skills[indexPath.row]
         guard skill.source.type == "linked", let packageId = skill.source.packageId else { return nil }
         let deleteAction = UIContextualAction(style: .destructive, title: "Remove Repo") { [weak self] _, _, completion in
             guard let self else {
@@ -1181,6 +1238,91 @@ extension SkillsViewController: UITableViewDataSource, UITableViewDelegate {
         }
         deleteAction.backgroundColor = Theme.danger
         return UISwipeActionsConfiguration(actions: [deleteAction])
+    }
+}
+
+// MARK: - Section Header
+
+private final class SectionHeaderView: UIView {
+
+    private let accentBar: UIView = {
+        let view = UIView()
+        view.layer.cornerRadius = 1.5
+        view.translatesAutoresizingMaskIntoConstraints = false
+        return view
+    }()
+
+    private let titleLabel: UILabel = {
+        let label = UILabel()
+        label.font = UIFont.monospacedSystemFont(ofSize: 11, weight: .bold)
+        label.textColor = Theme.textDim
+        label.translatesAutoresizingMaskIntoConstraints = false
+        return label
+    }()
+
+    private let countLabel: UILabel = {
+        let label = UILabel()
+        label.font = UIFont.monospacedSystemFont(ofSize: 10, weight: .bold)
+        label.textColor = Theme.textMuted
+        label.textAlignment = .center
+        label.backgroundColor = UIColor.white.withAlphaComponent(0.06)
+        label.layer.cornerRadius = 8
+        label.clipsToBounds = true
+        label.translatesAutoresizingMaskIntoConstraints = false
+        return label
+    }()
+
+    private let separator: UIView = {
+        let view = UIView()
+        view.backgroundColor = Theme.surfaceBorder
+        view.translatesAutoresizingMaskIntoConstraints = false
+        return view
+    }()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .clear
+
+        addSubview(accentBar)
+        addSubview(titleLabel)
+        addSubview(countLabel)
+        addSubview(separator)
+
+        NSLayoutConstraint.activate([
+            accentBar.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 20),
+            accentBar.centerYAnchor.constraint(equalTo: centerYAnchor, constant: -1),
+            accentBar.widthAnchor.constraint(equalToConstant: 3),
+            accentBar.heightAnchor.constraint(equalToConstant: 14),
+
+            titleLabel.leadingAnchor.constraint(equalTo: accentBar.trailingAnchor, constant: 8),
+            titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor, constant: -1),
+
+            countLabel.leadingAnchor.constraint(equalTo: titleLabel.trailingAnchor, constant: 8),
+            countLabel.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
+            countLabel.heightAnchor.constraint(equalToConstant: 16),
+            countLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 22),
+
+            separator.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 20),
+            separator.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -20),
+            separator.bottomAnchor.constraint(equalTo: bottomAnchor),
+            separator.heightAnchor.constraint(equalToConstant: 1.0 / UIScreen.main.scale),
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    func configure(title: String, count: Int, sourceType: String) {
+        titleLabel.text = title.uppercased()
+        countLabel.text = "  \(count)  "
+
+        let color: UIColor
+        switch sourceType {
+        case "builtin": color = Theme.accent
+        case "local":   color = UIColor(red: 1.0, green: 0.7, blue: 0.33, alpha: 1.0)
+        case "linked":  color = UIColor(red: 0.655, green: 0.545, blue: 0.98, alpha: 1.0)
+        default:        color = Theme.textMuted
+        }
+        accentBar.backgroundColor = color
     }
 }
 
