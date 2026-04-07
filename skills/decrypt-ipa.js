@@ -28,10 +28,6 @@
   const describeApp = (app) => `${app.bundleId} -> ${app.bundlePath}`;
 
   let appInfo = refreshAppInfo(options.target);
-  const initialDiagnostics = getDiagnosticsSummary(10);
-  if (initialDiagnostics) {
-    log(`app scan diagnostics: ${initialDiagnostics}`);
-  }
   log(`resolved ${describeApp(appInfo)}`);
 
   let pid = Tasks.findPid(appInfo);
@@ -221,5 +217,51 @@
     log(`ipa: ${ipaPath}`);
   }
 
-  return JSON.stringify(result, null, 2);
+  const lines = [`Decrypt IPA — ${appInfo.name} (${appInfo.bundleId})`, ""];
+  lines.push(`PID: ${pid} | Task access: ${taskInfo.access} (${taskInfo.source})`);
+  lines.push(`Loaded images: ${loadedImages.length} | Candidates: ${candidates.length}`);
+  lines.push("");
+
+  lines.push("Results:");
+  lines.push(`  Decrypted:         ${stats.decrypted}`);
+  lines.push(`  Already decrypted: ${stats.alreadyDecrypted}`);
+  lines.push(`  No encryption:     ${stats.skippedNoEncryptionInfo}`);
+  lines.push(`  Not loaded:        ${stats.skippedNotLoaded}`);
+  lines.push(`  Unreadable:        ${stats.skippedUnreadable}`);
+  if (stats.errors > 0) {
+    lines.push(`  Errors:            ${stats.errors}`);
+  }
+
+  if (files.some((f) => f.status === "decrypted")) {
+    lines.push("");
+    lines.push("Decrypted files:");
+    for (const f of files) {
+      if (f.status === "decrypted") {
+        lines.push(`  ${f.relativePath} (${f.bytesDecrypted} bytes)`);
+      }
+    }
+  }
+
+  if (files.some((f) => f.status === "error")) {
+    lines.push("");
+    lines.push("Errors:");
+    for (const f of files) {
+      if (f.status === "error") {
+        lines.push(`  ${f.relativePath}: ${f.error}`);
+      }
+    }
+  }
+
+  if (warnings.length) {
+    lines.push("");
+    lines.push("Warnings:");
+    for (const w of warnings) lines.push(`  ${w}`);
+  }
+
+  lines.push("");
+  lines.push(`Dump root: ${result.dumpRoot}`);
+  if (ipaPath) lines.push(`IPA: ${ipaPath}`);
+  lines.push(`Report: ${result.reportPath}`);
+
+  return lines.join("\n");
 })();

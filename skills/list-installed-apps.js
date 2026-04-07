@@ -33,10 +33,12 @@
   }
   log(`found ${apps.length} installed apps`);
 
-  return JSON.stringify({
-    ok: true,
-    count: apps.length,
-    diagnostics,
-    apps,
-  }, null, 2);
+  const lines = [`Installed Apps (${apps.length})`, ""];
+  for (const app of apps) {
+    lines.push(`  ${app.name}`);
+    lines.push(`    ${app.bundlePath}`);
+    lines.push("");
+  }
+
+  return lines.join("\n");
 })();

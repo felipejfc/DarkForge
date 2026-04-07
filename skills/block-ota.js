@@ -316,23 +316,29 @@
 
   log(headline);
 
-  const summary = {
-    skillVersion: SKILL_VERSION,
-    ok: !hasErrors,
-    alreadyApplied,
-    headline,
-    action,
-    setImmutable,
-    verbose,
-    counts,
-    results,
-    generatedAt: new Date().toISOString(),
-    notes: [
-      "Blocks OTA staging via /var/MobileAsset + /var/MobileSoftwareUpdate only.",
-      "Root filesystem (hosts file, launch daemons) is untouched.",
-      "Reboot or kill -9 softwareupdated nsurlsessiond to force a fresh check."
-    ],
-  };
+  const lines = [`OTA Update Blocker — ${headline}`, ""];
+  lines.push(`Action: ${action} | Immutable: ${setImmutable ? "yes" : "no"}`);
+  lines.push("");
 
-  return JSON.stringify(summary, null, 2);
+  for (const r of results) {
+    const shortPath = r.path.replace("/var/MobileAsset/AssetsV2/", "").replace("/var/MobileSoftwareUpdate/MobileAsset/AssetsV2/", "MSU/");
+    const icon = r.status === "blocked" || r.status === "already-blocked" ? "[x]"
+               : r.status === "unblocked" || r.status === "not-present" ? "[ ]"
+               : r.status === "error" ? "[!]"
+               : "[-]";
+    let detail = r.status;
+    if (r.status === "error" && r.error) detail += ` — ${r.error}`;
+    lines.push(`  ${icon} ${shortPath}`);
+    lines.push(`      ${detail}`);
+  }
+
+  if (hasErrors) {
+    lines.push("");
+    lines.push("Some paths had errors — check logs for details.");
+  }
+
+  lines.push("");
+  lines.push("Note: Reboot or kill softwareupdated/nsurlsessiond to force a fresh check.");
+
+  return lines.join("\n");
 })();
