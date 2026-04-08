@@ -719,7 +719,6 @@ async function executeRun() {
       const elapsed = `${Math.round(performance.now() - startedAt)} ms`;
       setRunMeta(`Job queued in ${elapsed}`, "running");
       writeResult(`Async job started.\njobId: ${result.jobId}`);
-      writeLogs([]);
       setConsoleTab("result");
       await refreshJob(result.jobId);
     } else {
@@ -731,13 +730,13 @@ async function executeRun() {
         setRunMeta(`Completed in ${elapsed}`);
       }
       writeResult(result.error || result.value || "undefined", Boolean(result.error));
-      writeLogs(result.logs || []);
-      setConsoleTab(result.error ? "result" : ((result.logs || []).length > 0 ? "logs" : "result"));
+      if (Array.isArray(result.logs) && result.logs.length > 0) writeLogs(result.logs);
+      const hasLogs = els.logOutput.textContent && els.logOutput.textContent !== "No logs emitted." && els.logOutput.textContent !== "No logs yet.";
+      setConsoleTab(result.error ? "result" : (hasLogs ? "logs" : "result"));
     }
   } catch (error) {
     setRunMeta("Execution failed", "error");
     writeResult(error.message, true);
-    writeLogs([]);
     setConsoleTab("result");
     showToast("Execution failed", "error");
   } finally {

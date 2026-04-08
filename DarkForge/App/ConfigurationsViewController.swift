@@ -37,76 +37,6 @@ class ConfigurationsViewController: UIViewController, UITextFieldDelegate {
         return label
     }()
 
-    private let replCard: UIView = {
-        let v = UIView()
-        v.backgroundColor = Theme.surface
-        v.layer.cornerRadius = 14
-        v.layer.borderColor = Theme.surfaceBorder.cgColor
-        v.layer.borderWidth = 1
-        v.clipsToBounds = true
-        v.translatesAutoresizingMaskIntoConstraints = false
-        return v
-    }()
-
-    private let replHeaderView: UIView = {
-        let v = UIView()
-        v.backgroundColor = UIColor(red: 0x1c/255.0, green: 0x1c/255.0, blue: 0x26/255.0, alpha: 1.0)
-        v.translatesAutoresizingMaskIntoConstraints = false
-        return v
-    }()
-
-    private let replHeaderLabel: UILabel = {
-        let label = UILabel()
-        label.text = "REPL"
-        label.font = UIFont.monospacedSystemFont(ofSize: 12, weight: .medium)
-        label.textColor = Theme.textDim
-        label.translatesAutoresizingMaskIntoConstraints = false
-        return label
-    }()
-
-    private let replStatusDot: UIView = {
-        let v = UIView()
-        v.backgroundColor = Theme.textDim
-        v.layer.cornerRadius = 4
-        v.translatesAutoresizingMaskIntoConstraints = false
-        return v
-    }()
-
-    private let replStatusLabel: UILabel = {
-        let label = UILabel()
-        label.text = "not started"
-        label.font = UIFont.monospacedSystemFont(ofSize: 12, weight: .regular)
-        label.textColor = Theme.textDim
-        label.translatesAutoresizingMaskIntoConstraints = false
-        return label
-    }()
-
-    private let replButton: UIButton = {
-        let button = UIButton(type: .system)
-        button.setTitle("  Reconnect", for: .normal)
-        button.setImage(UIImage(systemName: "arrow.clockwise"), for: .normal)
-        button.tintColor = .black
-        button.setTitleColor(.black, for: .normal)
-        button.titleLabel?.font = UIFont.systemFont(ofSize: 14, weight: .semibold)
-        button.backgroundColor = Theme.accent
-        button.layer.cornerRadius = 10
-        button.translatesAutoresizingMaskIntoConstraints = false
-        return button
-    }()
-
-    private let replDisconnectButton: UIButton = {
-        let button = UIButton(type: .system)
-        button.setTitle("  Disconnect", for: .normal)
-        button.setImage(UIImage(systemName: "xmark.circle"), for: .normal)
-        button.tintColor = Theme.error
-        button.setTitleColor(Theme.error, for: .normal)
-        button.titleLabel?.font = UIFont.systemFont(ofSize: 14, weight: .semibold)
-        button.backgroundColor = UIColor(red: 1.0, green: 0.36, blue: 0.36, alpha: 0.12)
-        button.layer.cornerRadius = 10
-        button.translatesAutoresizingMaskIntoConstraints = false
-        return button
-    }()
-
     private let serverCard: UIView = {
         let v = UIView()
         v.backgroundColor = Theme.surface
@@ -356,7 +286,6 @@ class ConfigurationsViewController: UIViewController, UITextFieldDelegate {
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
-        refreshReplStatus()
         if !isEditingServerSettings {
             loadServerSettings()
         }
@@ -376,14 +305,6 @@ class ConfigurationsViewController: UIViewController, UITextFieldDelegate {
         view.addSubview(scrollView)
 
         scrollView.addSubview(titleLabel)
-
-        scrollView.addSubview(replCard)
-        replCard.addSubview(replHeaderView)
-        replHeaderView.addSubview(replHeaderLabel)
-        replCard.addSubview(replStatusDot)
-        replCard.addSubview(replStatusLabel)
-        replCard.addSubview(replButton)
-        replCard.addSubview(replDisconnectButton)
 
         scrollView.addSubview(serverCard)
         serverCard.addSubview(serverHeaderView)
@@ -414,8 +335,6 @@ class ConfigurationsViewController: UIViewController, UITextFieldDelegate {
         agentPortField.addTarget(self, action: #selector(serverPortsEditingChanged), for: .editingChanged)
         logPortField.delegate = self
         logPortField.addTarget(self, action: #selector(serverPortsEditingChanged), for: .editingChanged)
-        replButton.addTarget(self, action: #selector(reconnectTapped), for: .touchUpInside)
-        replDisconnectButton.addTarget(self, action: #selector(disconnectTapped), for: .touchUpInside)
         syncLoggingSwitch.addTarget(self, action: #selector(syncLoggingSwitchChanged), for: .valueChanged)
         serverSaveButton.addTarget(self, action: #selector(saveServerAddressTapped), for: .touchUpInside)
 
@@ -431,38 +350,7 @@ class ConfigurationsViewController: UIViewController, UITextFieldDelegate {
             titleLabel.topAnchor.constraint(equalTo: contentGuide.topAnchor, constant: 16),
             titleLabel.leadingAnchor.constraint(equalTo: frameGuide.leadingAnchor, constant: 20),
 
-            replCard.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 20),
-            replCard.leadingAnchor.constraint(equalTo: frameGuide.leadingAnchor, constant: 16),
-            replCard.trailingAnchor.constraint(equalTo: frameGuide.trailingAnchor, constant: -16),
-
-            replHeaderView.topAnchor.constraint(equalTo: replCard.topAnchor),
-            replHeaderView.leadingAnchor.constraint(equalTo: replCard.leadingAnchor),
-            replHeaderView.trailingAnchor.constraint(equalTo: replCard.trailingAnchor),
-            replHeaderView.heightAnchor.constraint(equalToConstant: 32),
-
-            replHeaderLabel.centerYAnchor.constraint(equalTo: replHeaderView.centerYAnchor),
-            replHeaderLabel.leadingAnchor.constraint(equalTo: replHeaderView.leadingAnchor, constant: 14),
-
-            replStatusDot.topAnchor.constraint(equalTo: replHeaderView.bottomAnchor, constant: 14),
-            replStatusDot.leadingAnchor.constraint(equalTo: replCard.leadingAnchor, constant: 16),
-            replStatusDot.widthAnchor.constraint(equalToConstant: 8),
-            replStatusDot.heightAnchor.constraint(equalToConstant: 8),
-
-            replStatusLabel.centerYAnchor.constraint(equalTo: replStatusDot.centerYAnchor),
-            replStatusLabel.leadingAnchor.constraint(equalTo: replStatusDot.trailingAnchor, constant: 8),
-
-            replButton.topAnchor.constraint(equalTo: replStatusLabel.bottomAnchor, constant: 14),
-            replButton.leadingAnchor.constraint(equalTo: replCard.leadingAnchor, constant: 14),
-            replButton.heightAnchor.constraint(equalToConstant: 40),
-            replButton.bottomAnchor.constraint(equalTo: replCard.bottomAnchor, constant: -14),
-
-            replDisconnectButton.topAnchor.constraint(equalTo: replButton.topAnchor),
-            replDisconnectButton.leadingAnchor.constraint(equalTo: replButton.trailingAnchor, constant: 10),
-            replDisconnectButton.trailingAnchor.constraint(equalTo: replCard.trailingAnchor, constant: -14),
-            replDisconnectButton.heightAnchor.constraint(equalToConstant: 40),
-            replDisconnectButton.widthAnchor.constraint(equalTo: replButton.widthAnchor),
-
-            serverCard.topAnchor.constraint(equalTo: replCard.bottomAnchor, constant: 16),
+            serverCard.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 20),
             serverCard.leadingAnchor.constraint(equalTo: frameGuide.leadingAnchor, constant: 16),
             serverCard.trailingAnchor.constraint(equalTo: frameGuide.trailingAnchor, constant: -16),
 
@@ -546,27 +434,6 @@ class ConfigurationsViewController: UIViewController, UITextFieldDelegate {
 
     // MARK: - Actions
 
-    @objc private func reconnectTapped() {
-        guard let repl = KExploit.activeREPL else {
-            setStatus("not started", color: Theme.textDim)
-            return
-        }
-        repl.reconnect()
-        setStatus("connecting...", color: Theme.warning)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
-            self?.refreshReplStatus()
-        }
-    }
-
-    @objc private func disconnectTapped() {
-        guard let repl = KExploit.activeREPL else {
-            setStatus("not started", color: Theme.textDim)
-            return
-        }
-        repl.disconnect()
-        setStatus("disconnected", color: Theme.error)
-    }
-
     @objc private func saveServerAddressTapped() {
         view.endEditing(true)
 
@@ -609,11 +476,7 @@ class ConfigurationsViewController: UIViewController, UITextFieldDelegate {
         logPortField.text = String(ServerConfiguration.logPort)
         refreshServerHint()
 
-        if KExploit.activeREPL?.isConnected == true {
-            setServerStatus("saved, reconnect REPL to switch host/ports", color: Theme.warning)
-        } else {
-            setServerStatus("saved", color: Theme.success)
-        }
+        setServerStatus("saved", color: Theme.success)
     }
 
     @objc private func serverAddressEditingChanged() {
@@ -644,26 +507,6 @@ class ConfigurationsViewController: UIViewController, UITextFieldDelegate {
         syncLoggingSwitch.isOn = ServerConfiguration.synchronousLogging
         refreshServerHint()
         setServerStatus(nil, color: Theme.textDim)
-    }
-
-    private func refreshReplStatus() {
-        guard let repl = KExploit.activeREPL else {
-            setStatus("not started", color: Theme.textDim)
-            return
-        }
-        if repl.isConnected {
-            setStatus("connected", color: Theme.success)
-        } else if repl.shouldReconnect {
-            setStatus("reconnecting...", color: Theme.warning)
-        } else {
-            setStatus("disconnected", color: Theme.error)
-        }
-    }
-
-    private func setStatus(_ text: String, color: UIColor) {
-        replStatusLabel.text = text
-        replStatusLabel.textColor = color
-        replStatusDot.backgroundColor = color
     }
 
     private func setServerStatus(_ text: String?, color: UIColor) {
