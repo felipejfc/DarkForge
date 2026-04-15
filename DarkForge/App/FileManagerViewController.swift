@@ -286,6 +286,7 @@ final class FileManagerViewController: UIViewController {
         label.text = "File Manager"
         label.font = UIFont.systemFont(ofSize: 22, weight: .bold)
         label.textColor = Theme.text
+        label.lineBreakMode = .byTruncatingTail
         label.translatesAutoresizingMaskIntoConstraints = false
         return label
     }()
@@ -323,8 +324,8 @@ final class FileManagerViewController: UIViewController {
     private let toolbar: UIStackView = {
         let stack = UIStackView()
         stack.axis = .horizontal
-        stack.spacing = 6
-        stack.distribution = .fill
+        stack.spacing = 8
+        stack.distribution = .fillEqually
         stack.translatesAutoresizingMaskIntoConstraints = false
         return stack
     }()
@@ -494,13 +495,10 @@ final class FileManagerViewController: UIViewController {
         tableView.delegate = self
         tableView.dataSource = self
 
-        // Toolbar buttons (single row)
+        // Toolbar buttons stay icon-only on phones; full titles are exposed via accessibility labels.
         toolbar.addArrangedSubview(makeToolbarButton(title: "Root", icon: "house.fill", action: #selector(goHome)))
         toolbar.addArrangedSubview(makeToolbarButton(title: "Up", icon: "arrow.up", action: #selector(goUp)))
         toolbar.addArrangedSubview(makeToolbarButton(title: "Refresh", icon: "arrow.clockwise", action: #selector(refreshDirectory)))
-        let spacer = UIView()
-        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        toolbar.addArrangedSubview(spacer)
         toolbar.addArrangedSubview(makeToolbarButton(title: "Sort", icon: "arrow.up.arrow.down", action: #selector(showSortMenu)))
         toolbar.addArrangedSubview(makeToolbarButton(title: "Folder", icon: "folder.badge.plus", action: #selector(createDirectory)))
         toolbar.addArrangedSubview(makeToolbarButton(title: "File", icon: "doc.badge.plus", action: #selector(createFile)))
@@ -535,6 +533,7 @@ final class FileManagerViewController: UIViewController {
             // Title + Edit button
             titleLabel.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
             titleLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
+            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: editButton.leadingAnchor, constant: -12),
 
             editButton.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
             editButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
@@ -545,17 +544,17 @@ final class FileManagerViewController: UIViewController {
             breadcrumbScrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
             breadcrumbScrollView.heightAnchor.constraint(equalToConstant: 28),
 
-            breadcrumbStack.topAnchor.constraint(equalTo: breadcrumbScrollView.topAnchor),
-            breadcrumbStack.leadingAnchor.constraint(equalTo: breadcrumbScrollView.leadingAnchor),
-            breadcrumbStack.trailingAnchor.constraint(equalTo: breadcrumbScrollView.trailingAnchor),
-            breadcrumbStack.bottomAnchor.constraint(equalTo: breadcrumbScrollView.bottomAnchor),
-            breadcrumbStack.heightAnchor.constraint(equalTo: breadcrumbScrollView.heightAnchor),
+            breadcrumbStack.topAnchor.constraint(equalTo: breadcrumbScrollView.contentLayoutGuide.topAnchor),
+            breadcrumbStack.leadingAnchor.constraint(equalTo: breadcrumbScrollView.contentLayoutGuide.leadingAnchor),
+            breadcrumbStack.trailingAnchor.constraint(equalTo: breadcrumbScrollView.contentLayoutGuide.trailingAnchor),
+            breadcrumbStack.bottomAnchor.constraint(equalTo: breadcrumbScrollView.contentLayoutGuide.bottomAnchor),
+            breadcrumbStack.heightAnchor.constraint(equalTo: breadcrumbScrollView.frameLayoutGuide.heightAnchor),
 
             // Toolbar
             toolbar.topAnchor.constraint(equalTo: breadcrumbScrollView.bottomAnchor, constant: 6),
             toolbar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
             toolbar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
-            toolbar.heightAnchor.constraint(equalToConstant: 30),
+            toolbar.heightAnchor.constraint(equalToConstant: 34),
 
             // Search field
             searchField.topAnchor.constraint(equalTo: toolbar.bottomAnchor, constant: 6),
@@ -651,22 +650,17 @@ final class FileManagerViewController: UIViewController {
     private func makeToolbarButton(title: String, icon: String, action: Selector) -> UIButton {
         let button = UIButton(type: .system)
         var config = UIButton.Configuration.filled()
-        config.title = title
-        config.image = UIImage(systemName: icon, withConfiguration: UIImage.SymbolConfiguration(pointSize: 11, weight: .semibold))
-        config.imagePadding = 4
-        config.contentInsets = NSDirectionalEdgeInsets(top: 4, leading: 10, bottom: 4, trailing: 10)
+        config.image = UIImage(systemName: icon, withConfiguration: UIImage.SymbolConfiguration(pointSize: 14, weight: .semibold))
+        config.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 6, bottom: 6, trailing: 6)
         config.baseForegroundColor = Theme.text
         config.baseBackgroundColor = Theme.surface
         config.cornerStyle = .medium
-        config.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
-            var outgoing = incoming
-            outgoing.font = UIFont.systemFont(ofSize: 12, weight: .semibold)
-            return outgoing
-        }
         button.configuration = config
+        button.accessibilityLabel = title
         button.layer.borderColor = Theme.surfaceBorder.cgColor
         button.layer.borderWidth = 1
         button.layer.cornerRadius = 8
+        button.imageView?.contentMode = .scaleAspectFit
         button.addTarget(self, action: action, for: .touchUpInside)
         return button
     }
@@ -711,13 +705,17 @@ final class FileManagerViewController: UIViewController {
         config.title = title
         config.contentInsets = NSDirectionalEdgeInsets(top: 2, leading: 4, bottom: 2, trailing: 4)
         config.baseForegroundColor = isCurrent ? Theme.accent : Theme.textDim
+        config.titleLineBreakMode = .byTruncatingMiddle
         config.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
             var outgoing = incoming
             outgoing.font = UIFont.monospacedSystemFont(ofSize: 12, weight: isCurrent ? .bold : .regular)
             return outgoing
         }
         btn.configuration = config
+        btn.titleLabel?.numberOfLines = 1
+        btn.titleLabel?.lineBreakMode = .byTruncatingMiddle
         btn.setContentHuggingPriority(.required, for: .horizontal)
+        btn.setContentCompressionResistancePriority(.required, for: .horizontal)
         btn.addAction(UIAction { [weak self] _ in
             self?.loadDirectory(path: targetPath)
         }, for: .touchUpInside)
@@ -1451,6 +1449,8 @@ private final class FileEntryCell: UITableViewCell {
         let label = UILabel()
         label.font = UIFont.systemFont(ofSize: 14, weight: .medium)
         label.textColor = FileManagerViewController.Theme.text
+        label.numberOfLines = 1
+        label.lineBreakMode = .byTruncatingMiddle
         label.translatesAutoresizingMaskIntoConstraints = false
         return label
     }()
@@ -1459,6 +1459,9 @@ private final class FileEntryCell: UITableViewCell {
         let label = UILabel()
         label.font = UIFont.monospacedSystemFont(ofSize: 10, weight: .regular)
         label.textColor = FileManagerViewController.Theme.textDim
+        label.numberOfLines = 1
+        label.lineBreakMode = .byTruncatingTail
+        label.textAlignment = .right
         label.translatesAutoresizingMaskIntoConstraints = false
         return label
     }()
@@ -1474,6 +1477,9 @@ private final class FileEntryCell: UITableViewCell {
         contentView.addSubview(iconView)
         contentView.addSubview(nameLabel)
         contentView.addSubview(detailLabel)
+        nameLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        detailLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+        detailLabel.setContentHuggingPriority(.required, for: .horizontal)
 
         NSLayoutConstraint.activate([
             iconView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 12),
