@@ -19,6 +19,7 @@ FileUtils, log(), and the full DarkForge loader environment.
 import argparse
 import asyncio
 import base64
+import binascii
 import json
 import mimetypes
 import os
@@ -63,6 +64,7 @@ CONNECT_TIMEOUT = 120  # seconds to wait for initial connection
 AGENT_PING_INTERVAL = 10  # seconds between heartbeat pings
 AGENT_PONG_TIMEOUT = 25  # seconds without inbound agent traffic before eviction
 AGENT_RECONNECT_GRACE = 30  # seconds to wait for device reconnection before marking jobs lost
+FS_DOWNLOAD_CHUNK_SIZE = 512 * 1024
 TOOLS_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = TOOLS_DIR.parent
 
@@ -1997,8 +1999,14 @@ async def _app_icon_handler(query: dict) -> tuple[int, bytes, str]:
     return 200, icon_bytes, "image/png"
 
 
+def _decode_download_chunk(result: dict) -> bytes:
+    if result.get("binaryBase64") is not None:
+        return base64.b64decode(str(result.get("binaryBase64") or ""), validate=True)
+    return base64.b64decode(str(result.get("value") or ""), validate=True)
+
+
 async def _fs_download_handler(body: bytes) -> tuple[int, bytes, str]:
-    """Download a file from device via base64-encoded chunks."""
+    """Download a file from device via bounded binary chunks."""
     req = json.loads(body.decode("utf-8") or "{}")
     path = str(req.get("path", "")).strip()
     if not path:
@@ -2006,13 +2014,13 @@ async def _fs_download_handler(body: bytes) -> tuple[int, bytes, str]:
     if not _has_remote_runtime():
         return _json_response({"error": "Device not connected"}, status=503)
 
-    CHUNK = 786432  # 768KB raw -> ~1MB base64
     js_path = json.dumps(path, ensure_ascii=False)
     # Get file size first
     size_code = f"""
 (() => {{
   const st = FileUtils.stat({js_path});
   if (!st) return JSON.stringify({{error: "not found"}});
+  if (!st.isFile) return JSON.stringify({{error: "not a file"}});
   return JSON.stringify({{size: st.size}});
 }})()
 """
@@ -2027,35 +2035,34 @@ async def _fs_download_handler(body: bytes) -> tuple[int, bytes, str]:
         return _json_response({"error": info["error"]}, status=404)
 
     file_size = int(info.get("size", 0))
-    # Read in chunks via base64
-    chunks = []
+    chunks: list[bytes] = []
     offset = 0
     while offset < file_size:
-        length = min(CHUNK, file_size - offset)
+        length = min(FS_DOWNLOAD_CHUNK_SIZE, file_size - offset)
         read_code = f"""
 (() => {{
   const d = FileUtils.readFile({js_path}, {offset}, {length});
-  if (d === null) return "";
-  const u = new Uint8Array(d);
-  const C = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-  let s = "";
-  for (let i = 0; i < u.length; i += 3) {{
-    const a = u[i], b = i+1 < u.length ? u[i+1] : 0, c = i+2 < u.length ? u[i+2] : 0;
-    s += C[a>>2] + C[((a&3)<<4)|(b>>4)] + (i+1<u.length ? C[((b&0xF)<<2)|(c>>6)] : "=") + (i+2<u.length ? C[c&0x3F] : "=");
-  }}
-  return s;
+  if (d === null) throw new Error("read failed");
+  return d;
 }})()
 """
         result = await exec_code(read_code, timeout=EXEC_TIMEOUT * 4)
         if not result:
             return _json_response({"error": f"read failed at offset {offset}"}, status=500)
-        b64 = result.get("value", "")
-        if not b64:
-            break
-        chunks.append(base64.b64decode(b64))
-        offset += length
+        if result.get("error"):
+            return _json_response({"error": f"read failed at offset {offset}: {result['error']}", "logs": result.get("logs", [])}, status=500)
+        try:
+            chunk = _decode_download_chunk(result)
+        except (ValueError, binascii.Error) as error:
+            return _json_response({"error": f"invalid chunk payload at offset {offset}: {error}"}, status=500)
+        if len(chunk) != length:
+            return _json_response({"error": f"short read at offset {offset}: expected {length}, got {len(chunk)}"}, status=500)
+        chunks.append(chunk)
+        offset += len(chunk)
 
     file_bytes = b"".join(chunks)
+    if len(file_bytes) != file_size:
+        return _json_response({"error": f"download size mismatch: expected {file_size}, got {len(file_bytes)}"}, status=500)
     filename = path.rsplit("/", 1)[-1] or "download"
     return 200, file_bytes, f"application/octet-stream; filename=\"{filename}\""
 
